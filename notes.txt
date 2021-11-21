@@ -1,0 +1,3 @@
+gRPC compression
+https://grpc.github.io/grpc/core/md_doc_compression.html
+settable via grpc.UseCompression() call option.

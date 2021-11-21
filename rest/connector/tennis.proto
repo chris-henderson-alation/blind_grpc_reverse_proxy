@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+option go_package = ".;main";
+
+package main;
+
+service Tennis {
+    rpc Ping (Ball) returns (Ball) {}
+    rpc Rapid (Ball) returns (stream Ball) {}
+    rpc Write (Incoming) returns (Status) {}
+}
+
+message Ball {
+    string ball = 1;
+    Complex complex = 2;
+}
+
+message Complex {
+    repeated uint32 array = 1;
+    enum Corpus {
+        UNIVERSAL = 0;
+        WEB = 1;
+        IMAGES = 2;
+        LOCAL = 3;
+        NEWS = 4;
+        PRODUCTS = 5;
+        VIDEO = 6;
+    }
+    Corpus corpus = 4;
+    message Result {
+        string url = 1;
+        string title = 2;
+        repeated string snippets = 3;
+    }
+    Result result = 5;
+}
+
+message Incoming {
+    string message = 1;
+}
+
+message Status {
+    string fname = 1;
+    bool ok = 2;
+    string error = 3;
+}

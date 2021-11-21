@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+option go_package = "rpc";
+
+package rpc;
+
+service Servicer {
+  rpc PollJob(google.protobuf.Empty) returns (JobOptional) {};
+  rpc PushStream(stream PushStreamItem) returns (google.protobuf.Empty) {}
+}
+
+message PushStreamItem {
+  Headers headers = 1;
+  uint64 sequence = 2;
+  repeated bytes body = 3;
+}
+
+message JobOptional {
+  oneof options {
+    Job job = 1;
+    google.protobuf.Empty nothing = 2;
+  }
+}
+
+message Job {
+  Headers headers = 1;
+  bytes body = 2;
+}
+
+message Headers {
+  string Method = 1;
+  GrpcCallType type = 2;
+  uint64 jobID = 3;
+  uint64 connector = 4;
+}
+
+enum GrpcCallType {
+  Unary = 0; // Primary target
+  ServerStream = 1; // Primary target
+  ClientStream = 2; // Interesting
+  BiDirectionalStream = 3; // Sexy
+}
