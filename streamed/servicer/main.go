@@ -27,6 +27,7 @@ func (s Servicer) PushStream(server rpc.Servicer_PushStreamServer) error {
 		item := &rpc.PushStreamItem{}
 		err := server.RecvMsg(item)
 		if err != nil {
+			log.Info("Job complete")
 			return nil
 		}
 		go func() {
