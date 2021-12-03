@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+option go_package = "rpc";
+
+package rpc;
+
+service Agent {
+  rpc InitiateJob(google.protobuf.Empty) returns (stream Job) {};
+  rpc JobCallback(stream Bodies) returns (stream Body) {}
+}
+
+message Job {
+  string method = 1;
+  uint64 jobID = 3;
+  uint64 connector = 4;
+}
+
+message Body {
+  bytes body = 1;
+}
+
+message Bodies {
+  repeated bytes bodies = 1;
+  Error error = 2;
+}
+
+message JobBatch {
+  repeated bytes body = 3;
+}
+
+message Error {
+  uint32 code = 1;
+  string description = 2;
+}
