@@ -19,7 +19,7 @@ DESCRIPTOR = _descriptor.FileDescriptor(
   syntax='proto3',
   serialized_options=b'Z\006.;main',
   create_key=_descriptor._internal_create_key,
-  serialized_pb=b'\n\ntest.proto\x12\x04test\"\x19\n\x06String\x12\x0f\n\x07message\x18\x01 \x01(\t2\xf4\x01\n\x04Test\x12%\n\x05Unary\x12\x0c.test.String\x1a\x0c.test.String\"\x00\x12.\n\x0cServerStream\x12\x0c.test.String\x1a\x0c.test.String\"\x00\x30\x01\x12.\n\x0c\x43lientStream\x12\x0c.test.String\x1a\x0c.test.String\"\x00(\x01\x12\x31\n\rBidirectional\x12\x0c.test.String\x1a\x0c.test.String\"\x00(\x01\x30\x01\x12\x32\n\x10IntentionalError\x12\x0c.test.String\x1a\x0c.test.String\"\x00\x30\x01\x42\x08Z\x06.;mainb\x06proto3'
+  serialized_pb=b'\n\ntest.proto\x12\x04test\"\x19\n\x06String\x12\x0f\n\x07message\x18\x01 \x01(\t2\xa3\x02\n\x04Test\x12%\n\x05Unary\x12\x0c.test.String\x1a\x0c.test.String\"\x00\x12.\n\x0cServerStream\x12\x0c.test.String\x1a\x0c.test.String\"\x00\x30\x01\x12.\n\x0c\x43lientStream\x12\x0c.test.String\x1a\x0c.test.String\"\x00(\x01\x12\x31\n\rBidirectional\x12\x0c.test.String\x1a\x0c.test.String\"\x00(\x01\x30\x01\x12\x32\n\x10IntentionalError\x12\x0c.test.String\x1a\x0c.test.String\"\x00\x30\x01\x12-\n\x0bPerformance\x12\x0c.test.String\x1a\x0c.test.String\"\x00\x30\x01\x42\x08Z\x06.;mainb\x06proto3'
 )
 
 
@@ -77,7 +77,7 @@ _TEST = _descriptor.ServiceDescriptor(
   serialized_options=None,
   create_key=_descriptor._internal_create_key,
   serialized_start=48,
-  serialized_end=292,
+  serialized_end=339,
   methods=[
   _descriptor.MethodDescriptor(
     name='Unary',
@@ -123,6 +123,16 @@ _TEST = _descriptor.ServiceDescriptor(
     name='IntentionalError',
     full_name='test.Test.IntentionalError',
     index=4,
+    containing_service=None,
+    input_type=_STRING,
+    output_type=_STRING,
+    serialized_options=None,
+    create_key=_descriptor._internal_create_key,
+  ),
+  _descriptor.MethodDescriptor(
+    name='Performance',
+    full_name='test.Test.Performance',
+    index=5,
     containing_service=None,
     input_type=_STRING,
     output_type=_STRING,

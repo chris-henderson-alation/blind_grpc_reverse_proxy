@@ -3,11 +3,12 @@ package main
 import (
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"strconv"
 	"sync"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -33,13 +34,13 @@ type InternetFacing struct {
 }
 
 func (i *InternetFacing) StreamHandler() grpc.StreamHandler {
-	do := func(_ interface{}, stream grpc.ServerStream) error {
+	do := func(_ interface{}, upstream grpc.ServerStream) error {
 		fmt.Println("interesting")
-		fullMethodName, ok := grpc.MethodFromServerStream(stream)
+		fullMethodName, ok := grpc.MethodFromServerStream(upstream)
 		if !ok {
 			return grpc.Errorf(codes.Internal, "lowLevelServerStream not exists in context")
 		}
-		md, ok := metadata.FromIncomingContext(stream.Context())
+		md, ok := metadata.FromIncomingContext(upstream.Context())
 		if !ok {
 			return status.Error(codes.FailedPrecondition, "no friggin' headers my ")
 		}
@@ -53,7 +54,7 @@ func (i *InternetFacing) StreamHandler() grpc.StreamHandler {
 		call := GrpcCall{
 			Method:    fullMethodName,
 			Connector: connector,
-			Stream:    stream,
+			Stream:    upstream,
 			Error:     err,
 		}
 		i.lock.Lock()
@@ -91,9 +92,8 @@ func (i *InternetFacing) InitiateJob(_ *empty.Empty, server rpc.Agent_InitiateJo
 	}
 }
 
-func (i *InternetFacing) JobCallback(server rpc.Agent_JobCallbackServer) error {
-	fmt.Println("is back")
-	md, ok := metadata.FromIncomingContext(server.Context())
+func (i *InternetFacing) JobCallback(downstream rpc.Agent_JobCallbackServer) error {
+	md, ok := metadata.FromIncomingContext(downstream.Context())
 	if !ok {
 		panic("wat")
 	}
@@ -102,49 +102,50 @@ func (i *InternetFacing) JobCallback(server rpc.Agent_JobCallbackServer) error {
 		panic(err)
 	}
 	i.lock.Lock()
-	upstream := i.outbound[id]
+	upstreamClient := i.outbound[id]
 	delete(i.outbound, id)
 	i.lock.Unlock()
-	defer close(upstream.Error)
+	upstream := upstreamClient.Stream
+	upstreamError := upstreamClient.Error
 	go func() {
+		// Pipe upstreamClient messages to downstream.
+		var msg []byte
 		for {
-			var msg []byte
-			err := upstream.Stream.RecvMsg(&msg)
+			err := upstream.RecvMsg(&msg)
 			switch err {
 			case nil:
-				fmt.Println("okay sending")
-				server.Send(&rpc.Body{Body: msg})
-			case io.EOF, io.ErrClosedPipe:
+				// Account for downstream hung up.
+				downstream.Send(&rpc.Body{Body: msg})
+			case io.EOF:
+				// Account for downstream hung up.
+				downstream.Send(&rpc.Body{EOF: true})
+				return
+			default:
 				return
 			}
 		}
-
 	}()
+	defer close(upstreamError)
 	for {
-		batch, err := server.Recv()
+		body, err := downstream.Recv()
 		switch err {
 		case nil:
-			fmt.Println("is data")
-			for _, message := range batch.Bodies {
-				upstream.Stream.SendMsg(message)
-			}
-			if batch.Error != nil {
-				upstream.Error <- status.Error(codes.Code(batch.Error.Code), batch.Error.Description)
+			if body.Error != nil {
+				upstreamError <- status.Error(codes.Code(body.Error.Code), body.Error.Description)
 				return nil
 			}
+			upstream.SendMsg(body.Body)
 		case io.EOF:
-			fmt.Println("is done")
 			return nil
 		case io.ErrClosedPipe:
-			fmt.Println("is closed pip")
-			upstream.Error <- status.Error(codes.Canceled, "it hung up, just do something about this")
+			upstreamClient.Error <- status.Error(codes.Canceled, "it hung up, just do something about this")
 			return nil
 		default:
-			fmt.Println("is other error")
-			upstream.Error <- err
+			upstreamClient.Error <- err
 			return nil
 		}
 	}
+
 }
 
 type GrpcCall struct {
@@ -154,48 +155,6 @@ type GrpcCall struct {
 	Stream    grpc.ServerStream
 	Error     chan error
 }
-
-//func (i *InternetFacing) Send(call GrpcCall) <-chan error {
-//	result := make(chan error)
-//	i.lock.Lock()
-//	i.counter += 1
-//	i.outbound[i.counter] = result
-//	call.JobId = i.counter
-//	i.lock.Unlock()
-//	i.inbound <- call
-//	return result
-//}
-
-//type Initiate struct {
-//}
-
-//type GrpcResponse struct {
-//	Message []byte
-//	Error   error
-//}
-
-//type GrpcCallType int
-//
-//const (
-//	Unary GrpcCallType = iota // Primary target
-//	ServerStream
-//	ClientStream
-//	BiDirectionalStream
-//)
-
-//func (receiver GrpcCallType) ToProto() rpc.GrpcCallType {
-//	switch receiver {
-//	case Unary:
-//		return rpc.GrpcCallType_Unary
-//	case ServerStream:
-//		return rpc.GrpcCallType_ServerStream
-//	case ClientStream:
-//		return rpc.GrpcCallType_ClientStream
-//	case BiDirectionalStream:
-//		return rpc.GrpcCallType_BiDirectionalStream
-//	}
-//	panic("non-exhaustive")
-//}
 
 func NewInternetFacing(port string) *InternetFacing {
 	s := grpc.NewServer(grpc.KeepaliveParams(keepalive.ServerParameters{

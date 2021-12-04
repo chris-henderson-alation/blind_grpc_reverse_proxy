@@ -5,6 +5,8 @@
       <change beforePath="$PROJECT_DIR$/../../.idea/blind_grpc_reverse_proxy.iml" beforeDir="false" afterPath="$PROJECT_DIR$/../../.idea/blind_grpc_reverse_proxy.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/../../.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/../../.idea/vcs.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/../../encrypted/servicer/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/../../encrypted/servicer/main.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/alation.py" beforeDir="false" afterPath="$PROJECT_DIR$/alation.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/../../notes.txt" beforeDir="false" afterPath="$PROJECT_DIR$/../../notes.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/../../streamed/agent/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/../../streamed/agent/main.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/../../streamed/servicer/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/../../streamed/servicer/main.go" afterDir="false" />

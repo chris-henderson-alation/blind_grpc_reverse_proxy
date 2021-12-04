@@ -39,6 +39,11 @@ class TestStub(object):
                 request_serializer=test__pb2.String.SerializeToString,
                 response_deserializer=test__pb2.String.FromString,
                 )
+        self.Performance = channel.unary_stream(
+                '/test.Test/Performance',
+                request_serializer=test__pb2.String.SerializeToString,
+                response_deserializer=test__pb2.String.FromString,
+                )
 
 
 class TestServicer(object):
@@ -74,6 +79,12 @@ class TestServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def Performance(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_TestServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -99,6 +110,11 @@ def add_TestServicer_to_server(servicer, server):
             ),
             'IntentionalError': grpc.unary_stream_rpc_method_handler(
                     servicer.IntentionalError,
+                    request_deserializer=test__pb2.String.FromString,
+                    response_serializer=test__pb2.String.SerializeToString,
+            ),
+            'Performance': grpc.unary_stream_rpc_method_handler(
+                    servicer.Performance,
                     request_deserializer=test__pb2.String.FromString,
                     response_serializer=test__pb2.String.SerializeToString,
             ),
@@ -192,6 +208,23 @@ class Test(object):
             timeout=None,
             metadata=None):
         return grpc.experimental.unary_stream(request, target, '/test.Test/IntentionalError',
+            test__pb2.String.SerializeToString,
+            test__pb2.String.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def Performance(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(request, target, '/test.Test/Performance',
             test__pb2.String.SerializeToString,
             test__pb2.String.FromString,
             options, channel_credentials,

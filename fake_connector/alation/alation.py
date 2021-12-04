@@ -44,8 +44,8 @@ def intentional_error():
 
 
 if __name__ == "__main__":
-    # unary()
-    # server_stream()
-    # client_stream()
-    # bidirectional_stream()
+    unary()
+    server_stream()
+    client_stream()
+    bidirectional_stream()
     intentional_error()

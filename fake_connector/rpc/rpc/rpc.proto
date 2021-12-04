@@ -8,7 +8,7 @@ package rpc;
 
 service Agent {
   rpc InitiateJob(google.protobuf.Empty) returns (stream Job) {};
-  rpc JobCallback(stream Bodies) returns (stream Body) {}
+  rpc JobCallback(stream Body) returns (stream Body) {}
 }
 
 message Job {
@@ -19,15 +19,8 @@ message Job {
 
 message Body {
   bytes body = 1;
-}
-
-message Bodies {
-  repeated bytes bodies = 1;
   Error error = 2;
-}
-
-message JobBatch {
-  repeated bytes body = 3;
+  bool EOF = 3;
 }
 
 message Error {

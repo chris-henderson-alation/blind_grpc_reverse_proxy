@@ -38,10 +38,6 @@ func main() {
 
 type Connector struct{}
 
-func (c Connector) IntentionalError(s *String, server Test_IntentionalErrorServer) error {
-	return status.New(codes.DataLoss, "THIS IS INTENTIONALLY BAD").Err()
-}
-
 func (c Connector) Unary(ctx context.Context, s *String) (*String, error) {
 	response := randomString()
 	log.Infof("Got Unary request: '%s' adding '%s'", s.Message, response)
@@ -102,6 +98,27 @@ func (c Connector) Bidirectional(server Test_BidirectionalServer) error {
 		}
 	}
 
+	return nil
+}
+
+func (c Connector) IntentionalError(s *String, server Test_IntentionalErrorServer) error {
+	return status.New(codes.DataLoss, "THIS IS INTENTIONALLY BAD").Err()
+}
+
+func (c Connector) Performance(s *String, server Test_PerformanceServer) error {
+	b := strings.Builder{}
+	for i := b.Len(); i < 1024*50; i = b.Len() {
+		b.WriteString(randomString())
+	}
+	length := b.Len()
+	str := &String{Message: b.String()}
+	gigabyte := 1024 * 1024 * 1024
+	for i := gigabyte; i > 0; i -= length {
+		err := server.Send(str)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

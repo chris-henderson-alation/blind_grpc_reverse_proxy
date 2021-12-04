@@ -10,6 +10,7 @@ service Test {
   rpc ClientStream(stream String) returns (String) {}
   rpc Bidirectional(stream String) returns (stream String) {}
   rpc IntentionalError(String) returns (stream String) {}
+  rpc Performance(String) returns (stream String) {}
 }
 
 message String {
