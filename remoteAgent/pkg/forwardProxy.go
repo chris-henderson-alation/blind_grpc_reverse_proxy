@@ -18,6 +18,12 @@ type ForwardProxy struct {
 	ioc.UnimplementedGrpcInverterServer
 }
 
+func NewForwardProxy() *ForwardProxy {
+	return &ForwardProxy{
+		agents: NewAgents(),
+	}
+}
+
 func (proxy *ForwardProxy) Submit(call *GrpcCall) error {
 	return proxy.agents.Submit(call)
 }
@@ -37,6 +43,7 @@ func (proxy *ForwardProxy) JobTunnel(empty *empty.Empty, server ioc.GrpcInverter
 	for {
 		select {
 		case <-server.Context().Done():
+			logrus.Println("context cancelled")
 			proxy.agents.Unregister(agentId)
 			return nil
 		case job := <-jobs:
@@ -58,7 +65,6 @@ func (proxy *ForwardProxy) JobTunnel(empty *empty.Empty, server ioc.GrpcInverter
 			proxy.agents.Enqueue(job)
 		}
 	}
-
 }
 
 func (proxy *ForwardProxy) Pipe(agent ioc.GrpcInverter_PipeServer) error {

@@ -10,16 +10,20 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+const ConnectorIdHeader = "x-alation-connector"
+const AgentIdHeader = "x-alation-agent"
+const JobIdHeader = "x-alation-job"
+
 func ExtractConnectorId(ctx context.Context) (uint64, error) {
-	return ExtractUint64Header("x-alation-connector", ctx)
+	return ExtractUint64Header(ConnectorIdHeader, ctx)
 }
 
 func ExtractAgentId(ctx context.Context) (uint64, error) {
-	return ExtractUint64Header("x-alation-agent", ctx)
+	return ExtractUint64Header(AgentIdHeader, ctx)
 }
 
 func ExtractJobId(ctx context.Context) (uint64, error) {
-	return ExtractUint64Header("x-alation-job", ctx)
+	return ExtractUint64Header(JobIdHeader, ctx)
 }
 
 func ExtractUint64Header(header string, ctx context.Context) (uint64, error) {
@@ -43,4 +47,38 @@ func ExtractHeader(header string, ctx context.Context) (string, error) {
 		logrus.Warnf("expected a single value for the header '%s', however the following were found: %v", header, values)
 	}
 	return values[0], nil
+}
+
+type HeaderBuilder struct {
+	headers map[string]string
+}
+
+func NewHeaderBuilder() *HeaderBuilder {
+	return &HeaderBuilder{headers: map[string]string{}}
+}
+
+func (h *HeaderBuilder) Build(ctx context.Context) context.Context {
+	fmt.Println(h.headers)
+	return metadata.NewOutgoingContext(ctx, metadata.New(h.headers))
+}
+
+func (h *HeaderBuilder) SetConnectorId(value uint64) *HeaderBuilder {
+	return h.SetUint64Header(ConnectorIdHeader, value)
+}
+
+func (h *HeaderBuilder) SetAgentId(value uint64) *HeaderBuilder {
+	return h.SetUint64Header(AgentIdHeader, value)
+}
+
+func (h *HeaderBuilder) SetJobId(value uint64) *HeaderBuilder {
+	return h.SetUint64Header(JobIdHeader, value)
+}
+
+func (h *HeaderBuilder) SetUint64Header(header string, value uint64) *HeaderBuilder {
+	return h.SetHeader(header, strconv.FormatUint(value, 10))
+}
+
+func (h *HeaderBuilder) SetHeader(header, value string) *HeaderBuilder {
+	h.headers[header] = value
+	return h
 }

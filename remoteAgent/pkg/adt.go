@@ -18,6 +18,14 @@ type Agents struct {
 	lock         sync.Mutex
 }
 
+func NewAgents() *Agents {
+	return &Agents{
+		listeners:    map[AgentId]chan *GrpcCall{},
+		awaitingJobs: map[AgentId]*EndangeredJob{},
+		lock:         sync.Mutex{},
+	}
+}
+
 func (a *Agents) Register(agent AgentId) (chan *GrpcCall, bool) {
 	a.lock.Lock()
 	defer a.lock.Unlock()
