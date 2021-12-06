@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+option go_package = ".;ioc";
+
+package ioc;
+
+service GrpcInverter {
+  rpc JobTunnel(google.protobuf.Empty) returns (stream Job) {};
+  ////////////////////////////////////////////////////////////
+  // This warrants big dedicated comment blocks as this is what
+  // drives the entire OCF remote agent for connector jobs.
+  rpc Pipe(stream Message) returns (stream Message) {}
+  ////////////////////////////////////////////////////////////
+  ////////////////////////////////////////////////////////////
+  ////////////////////////////////////////////////////////////
+}
+
+service RemoteHydra {
+  rpc Install(google.protobuf.Empty) returns (stream Bytes) {}
+  rpc Uninstall(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  rpc Start(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  rpc Stop(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  rpc Kill(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  rpc Restart(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  rpc Stats(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  rpc Logs(google.protobuf.Empty) returns (stream Bytes) {}
+  rpc List(google.protobuf.Empty) returns (stream Bytes) {}
+}
+
+message Job {
+  uint64 jobID = 1;
+  string method = 2;
+  uint64 connector = 3;
+}
+
+message Message {
+  bytes body = 1;
+  Error error = 2;
+  bool EOF = 3;
+}
+
+message Error {
+  uint32 code = 1;
+  string description = 2;
+}
+
+message Status {
+  oneof status {
+    google.protobuf.Empty ok = 1;
+    Error error = 2;
+  }
+}
+
+message Bytes {
+  bytes bytes = 1;
+}
