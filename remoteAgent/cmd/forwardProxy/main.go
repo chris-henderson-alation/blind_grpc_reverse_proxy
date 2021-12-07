@@ -14,6 +14,7 @@ func main() {
 	internalServer := grpc.NewServer(
 		grpc.KeepaliveParams(grpcinverter.KEEPALIVE_SERVER_PARAMETERS),
 		grpc.KeepaliveEnforcementPolicy(grpcinverter.KEEPALIVE_ENFORCEMENT_POLICY),
+		grpc.ForceServerCodec(grpcinverter.NoopCodec{}),
 		grpc.UnknownServiceHandler(forwardProxy.StreamHandler()))
 	externalServer := grpc.NewServer(
 		grpc.KeepaliveParams(grpcinverter.KEEPALIVE_SERVER_PARAMETERS),

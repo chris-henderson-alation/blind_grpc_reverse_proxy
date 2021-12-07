@@ -28,7 +28,7 @@ func (proxy *ForwardProxy) Submit(call *GrpcCall) error {
 	return proxy.agents.Submit(call)
 }
 
-func (proxy *ForwardProxy) JobTunnel(empty *empty.Empty, server ioc.GrpcInverter_JobTunnelServer) error {
+func (proxy *ForwardProxy) JobTunnel(_ *empty.Empty, server ioc.GrpcInverter_JobTunnelServer) error {
 	agentId, err := ExtractAgentId(server.Context())
 	if err != nil {
 		logrus.Error(err)
@@ -40,6 +40,7 @@ func (proxy *ForwardProxy) JobTunnel(empty *empty.Empty, server ioc.GrpcInverter
 			"an agent with ID %d is already listeners for events, "+
 				"this agent has been rejected as being a duplicate", agentId)
 	}
+	logrus.Infof("Agent ID %d connected", agentId)
 	for {
 		select {
 		case <-server.Context().Done():
@@ -62,7 +63,7 @@ func (proxy *ForwardProxy) JobTunnel(empty *empty.Empty, server ioc.GrpcInverter
 				}
 				continue
 			}
-			proxy.agents.Enqueue(job)
+			proxy.agents.Enqueue(job, nil)
 		}
 	}
 }
@@ -76,15 +77,14 @@ func (proxy *ForwardProxy) Pipe(agent ioc.GrpcInverter_PipeServer) error {
 	if err != nil {
 		return err
 	}
-	job := proxy.agents.Retrieve(agentId, jobId)
+	job, bookmark := proxy.agents.Retrieve(agentId, jobId)
 	if job == nil {
 		return fmt.Errorf("nice catch blanco nino, but too bad your ass got saaaaaacked")
 	}
-	ioc.ForwardProxy(job.Alation, agent)
-	ok := true
-	if !ok {
+	bookmark, shouldRetry := ioc.ForwardProxy(job.Alation, agent, bookmark)
+	if shouldRetry {
 		// put the job back in just case the agent calls back.
-		proxy.agents.Enqueue(job)
+		proxy.agents.Enqueue(job, bookmark)
 	}
 	return nil
 }

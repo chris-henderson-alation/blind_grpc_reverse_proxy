@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/sirupsen/logrus"
 
@@ -15,9 +16,11 @@ import (
 )
 
 const agentId = 1
+const proxyAddress = "0.0.0.0"
+const proxyPort = "1234"
 
 func main() {
-	client := NewClient("1234")
+	client := NewClient()
 	jobs, err := client.JobTunnel(grpcinverter.NewHeaderBuilder().SetAgentId(agentId).Build(context.Background()), &empty.Empty{})
 	if err != nil {
 		panic(err)
@@ -31,11 +34,11 @@ func main() {
 	}
 }
 
-func NewClient(port string) ioc.GrpcInverterClient {
+func NewClient() ioc.GrpcInverterClient {
 	//conn, err := grpc.Dial(fmt.Sprintf("fresh-crane.alation-test.com:%s", port),
 	//	grpc.WithInsecure(),
 	//	grpc.WithKeepaliveParams(shared.KEEPALIVE_CLIENT_PARAMETERS))
-	conn, err := grpc.Dial(fmt.Sprintf("0.0.0.0:%s", port),
+	conn, err := grpc.Dial(fmt.Sprintf("%s:%s", proxyAddress, proxyPort),
 		grpc.WithInsecure(),
 		grpc.WithKeepaliveParams(grpcinverter.KEEPALIVE_CLIENT_PARAMETERS))
 	if err != nil {
@@ -51,7 +54,7 @@ func dispatch(job *ioc.Job) {
 		SetAgentId(agentId).
 		SetJobId(job.JobID).
 		Build(context.Background())
-	c := NewClient("1234")
+	c := NewClient()
 	upstream, err := c.Pipe(headers)
 	if err != nil {
 		panic(err)
@@ -73,5 +76,22 @@ func dispatch(job *ioc.Job) {
 		upstream.SendMsg(err)
 		return
 	}
-	ioc.ReverseProxy(upstream, downstream)
+	var bookmark *ioc.Message
+	var shouldRetry bool
+	for {
+		bookmark, shouldRetry = ioc.ReverseProxy(upstream, downstream, bookmark)
+		if shouldRetry {
+			logrus.Error("Failed! Trying again in a minute!")
+			time.Sleep(time.Minute)
+			c = NewClient()
+			upstream, err = c.Pipe(headers)
+			if err != nil {
+				panic("dunno, loops on loops")
+			}
+			logrus.Info("yoooo reconnected!")
+		} else {
+			return
+		}
+	}
+
 }

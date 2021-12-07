@@ -1,6 +1,7 @@
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
 
 option go_package = ".;ioc";
 
@@ -44,6 +45,7 @@ message Message {
 message Error {
   uint32 code = 1;
   string description = 2;
+  google.protobuf.ListValue details = 3 ;
 }
 
 message Status {

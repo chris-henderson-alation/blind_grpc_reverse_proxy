@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter/ioc"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -61,40 +63,42 @@ func (a *Agents) Submit(call *GrpcCall) error {
 	return nil
 }
 
-func (a *Agents) Enqueue(call *GrpcCall) {
-	endangeredJob := NewEndangeredJob(call)
+func (a *Agents) Enqueue(call *GrpcCall, bookmark *ioc.Message) {
+	endangeredJob := NewEndangeredJob(call, bookmark)
 	a.lock.Lock()
 	a.awaitingJobs[call.JobId] = endangeredJob
 	a.lock.Unlock()
 	go endangeredJob.CountdownToDeath(a)
 }
 
-func (a *Agents) Retrieve(agentId AgentId, jobId JobId) *GrpcCall {
+func (a *Agents) Retrieve(agentId AgentId, jobId JobId) (*GrpcCall, *ioc.Message) {
 	a.lock.Lock()
 	defer a.lock.Unlock()
 	job, ok := a.awaitingJobs[jobId]
 	if !ok {
 		// @TODO
-		return nil
+		return nil, nil
 	}
 	if job.call.Agent != agentId {
 		// @TODO
-		return nil
+		return nil, nil
 	}
 	job.Rescue()
 	delete(a.awaitingJobs, jobId)
-	return job.call
+	return job.call, job.bookmark
 }
 
 type EndangeredJob struct {
 	call          *GrpcCall
+	bookmark      *ioc.Message
 	stopCountdown chan struct{}
 }
 
-func NewEndangeredJob(call *GrpcCall) *EndangeredJob {
+func NewEndangeredJob(call *GrpcCall, bookmark *ioc.Message) *EndangeredJob {
 	return &EndangeredJob{
 		call:          call,
 		stopCountdown: make(chan struct{}),
+		bookmark:      bookmark,
 	}
 }
 
