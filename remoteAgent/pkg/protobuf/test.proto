@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+option go_package = ".;grpcinverter";
+
+package test;
+
+service Test {
+  rpc Unary(String) returns (String) {}
+  rpc ServerStream(String) returns (stream String) {}
+  rpc ClientStream(stream String) returns (String) {}
+  rpc Bidirectional(stream String) returns (stream String) {}
+  rpc IntentionalError(String) returns (stream String) {}
+  rpc Performance(String) returns (stream String) {}
+}
+
+message String {
+  string message = 1;
+}

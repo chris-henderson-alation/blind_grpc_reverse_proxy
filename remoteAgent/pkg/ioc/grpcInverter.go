@@ -1,6 +1,7 @@
 package ioc // import "github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter"
 
 import (
+	"fmt"
 	"io"
 	"sync"
 
@@ -120,6 +121,7 @@ func ForwardProxy(alation Alation, agent Reverse, previousBookmark *Message) (*M
 				break
 			case io.EOF:
 				// The stream has successfully completed.
+				fmt.Println("yeah?")
 				alation.SendError(nil)
 				return
 			default:
@@ -160,6 +162,7 @@ func ForwardProxy(alation Alation, agent Reverse, previousBookmark *Message) (*M
 	default:
 	}
 	logrus.Info("success!")
+	logrus.Info("suuuuupah success!")
 	return nil, false
 }
 
