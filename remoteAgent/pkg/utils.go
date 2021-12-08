@@ -58,7 +58,6 @@ func NewHeaderBuilder() *HeaderBuilder {
 }
 
 func (h *HeaderBuilder) Build(ctx context.Context) context.Context {
-	fmt.Println(h.headers)
 	return metadata.NewOutgoingContext(ctx, metadata.New(h.headers))
 }
 

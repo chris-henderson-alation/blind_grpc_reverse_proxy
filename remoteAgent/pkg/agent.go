@@ -62,7 +62,7 @@ func (a *Agent) EventLoop() {
 		for {
 			job, err := jobs.Recv()
 			if err != nil {
-				logrus.Error(err)
+				logrus.Warn(err)
 				return
 			}
 			go a.Dispatch(job)

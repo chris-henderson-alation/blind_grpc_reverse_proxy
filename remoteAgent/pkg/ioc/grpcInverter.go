@@ -1,7 +1,6 @@
 package ioc // import "github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter"
 
 import (
-	"fmt"
 	"io"
 	"sync"
 
@@ -56,38 +55,17 @@ func ForwardProxy(alation Alation, agent Reverse, previousBookmark *Message) (*M
 				return
 			}
 		}
+		var msg *Message
 		for {
 			err := alation.RecvMsg(&body)
 			switch err {
 			case nil:
 				// Just another message to send.
-				err = agent.Send(&Message{Body: body})
-				if err != nil {
-					// Uhhhh...uh oh. This is likely an internet connection failure. here is where we have
-					// the opportunity to reconnect.
-					//
-					// So the interesting thing here is that we have a message loaded into the barrel to send
-					// downstream. So let's hold onto that just in case the agent manages to reconnect.
-					bookmark = &Message{Body: body}
-					close(agentFailed)
-					logrus.Errorf("agent.Send(EOF) failed with %v, type %T", err, err)
-					return
-				}
+				msg = &Message{Body: body}
 			case io.EOF:
 				// Alation is signaling that it is done sending
 				// messages down the client side of its pipe.
-				err = agent.Send(&Message{EOF: true})
-				if err != nil {
-					// Uhhhh...uh oh. This is likely an internet connection failure. here is where we have
-					// the opportunity to reconnect.
-					//
-					// So the interesting thing here is that we have a message loaded into the barrel to send
-					// downstream. So let's hold onto that just in case the agent manages to reconnect.
-					bookmark = &Message{EOF: true}
-					close(agentFailed)
-					logrus.Errorf("agent.Send(EOF) failed with %v, type %T", err, err)
-				}
-				return
+				msg = &Message{EOF: true}
 			default:
 				// Alation croaked!
 				close(alationFailed)
@@ -109,7 +87,20 @@ func ForwardProxy(alation Alation, agent Reverse, previousBookmark *Message) (*M
 				logrus.Errorf("other error from alation.RecvMsg(), %v", err)
 				return
 			}
-
+			err = agent.Send(msg)
+			if err != nil {
+				// Uhhhh...uh oh. This is likely an internet connection failure. here is where we have
+				// the opportunity to reconnect.
+				//
+				// So the interesting thing here is that we have a message loaded into the barrel to send
+				// downstream. So let's hold onto that just in case the agent manages to reconnect.
+				bookmark = &Message{EOF: true}
+				close(agentFailed)
+				logrus.Errorf("agent.Send(EOF) failed with %v, type %T", err, err)
+			}
+			if msg.EOF {
+				return
+			}
 		}
 	}()
 	go func() {
@@ -121,7 +112,6 @@ func ForwardProxy(alation Alation, agent Reverse, previousBookmark *Message) (*M
 				break
 			case io.EOF:
 				// The stream has successfully completed.
-				fmt.Println("yeah?")
 				alation.SendError(nil)
 				return
 			default:

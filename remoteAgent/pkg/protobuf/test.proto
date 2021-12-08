@@ -11,8 +11,13 @@ service Test {
   rpc Bidirectional(stream String) returns (stream String) {}
   rpc IntentionalError(String) returns (stream String) {}
   rpc Performance(String) returns (stream String) {}
+  rpc PerformanceBytes(TestBytes) returns (stream TestBytes) {}
 }
 
 message String {
   string message = 1;
+}
+
+message TestBytes {
+  bytes body = 1;
 }

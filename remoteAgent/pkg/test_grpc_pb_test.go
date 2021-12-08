@@ -24,6 +24,7 @@ type TestClient interface {
 	Bidirectional(ctx context.Context, opts ...grpc.CallOption) (Test_BidirectionalClient, error)
 	IntentionalError(ctx context.Context, in *String, opts ...grpc.CallOption) (Test_IntentionalErrorClient, error)
 	Performance(ctx context.Context, in *String, opts ...grpc.CallOption) (Test_PerformanceClient, error)
+	PerformanceBytes(ctx context.Context, in *TestBytes, opts ...grpc.CallOption) (Test_PerformanceBytesClient, error)
 }
 
 type testClient struct {
@@ -204,6 +205,38 @@ func (x *testPerformanceClient) Recv() (*String, error) {
 	return m, nil
 }
 
+func (c *testClient) PerformanceBytes(ctx context.Context, in *TestBytes, opts ...grpc.CallOption) (Test_PerformanceBytesClient, error) {
+	stream, err := c.cc.NewStream(ctx, &Test_ServiceDesc.Streams[5], "/test.Test/PerformanceBytes", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &testPerformanceBytesClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type Test_PerformanceBytesClient interface {
+	Recv() (*TestBytes, error)
+	grpc.ClientStream
+}
+
+type testPerformanceBytesClient struct {
+	grpc.ClientStream
+}
+
+func (x *testPerformanceBytesClient) Recv() (*TestBytes, error) {
+	m := new(TestBytes)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // TestServer is the server API for Test service.
 // All implementations must embed UnimplementedTestServer
 // for forward compatibility
@@ -214,6 +247,7 @@ type TestServer interface {
 	Bidirectional(Test_BidirectionalServer) error
 	IntentionalError(*String, Test_IntentionalErrorServer) error
 	Performance(*String, Test_PerformanceServer) error
+	PerformanceBytes(*TestBytes, Test_PerformanceBytesServer) error
 	mustEmbedUnimplementedTestServer()
 }
 
@@ -238,6 +272,9 @@ func (UnimplementedTestServer) IntentionalError(*String, Test_IntentionalErrorSe
 }
 func (UnimplementedTestServer) Performance(*String, Test_PerformanceServer) error {
 	return status.Errorf(codes.Unimplemented, "method Performance not implemented")
+}
+func (UnimplementedTestServer) PerformanceBytes(*TestBytes, Test_PerformanceBytesServer) error {
+	return status.Errorf(codes.Unimplemented, "method PerformanceBytes not implemented")
 }
 func (UnimplementedTestServer) mustEmbedUnimplementedTestServer() {}
 
@@ -385,6 +422,27 @@ func (x *testPerformanceServer) Send(m *String) error {
 	return x.ServerStream.SendMsg(m)
 }
 
+func _Test_PerformanceBytes_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(TestBytes)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(TestServer).PerformanceBytes(m, &testPerformanceBytesServer{stream})
+}
+
+type Test_PerformanceBytesServer interface {
+	Send(*TestBytes) error
+	grpc.ServerStream
+}
+
+type testPerformanceBytesServer struct {
+	grpc.ServerStream
+}
+
+func (x *testPerformanceBytesServer) Send(m *TestBytes) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 // Test_ServiceDesc is the grpc.ServiceDesc for Test service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -422,6 +480,11 @@ var Test_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Performance",
 			Handler:       _Test_Performance_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "PerformanceBytes",
+			Handler:       _Test_PerformanceBytes_Handler,
 			ServerStreams: true,
 		},
 	},
