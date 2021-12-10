@@ -95,9 +95,10 @@ func (proxy *ForwardProxy) StreamHandler() grpc.StreamHandler {
 		if !ok {
 			return status.Error(codes.Internal, "lowLevelServerStream not exists in context")
 		}
-		angentId, err := ExtractAgentId(upstream.Context())
+		agentId, err := ExtractAgentId(upstream.Context())
 		if err != nil {
-			return err
+			agentId = 1
+			//return err
 		}
 		connectorId, err := ExtractConnectorId(upstream.Context())
 		if err != nil {
@@ -105,13 +106,14 @@ func (proxy *ForwardProxy) StreamHandler() grpc.StreamHandler {
 		}
 		jobId, err := ExtractJobId(upstream.Context())
 		if err != nil {
-			return err
+			jobId = 1
+			//return err
 		}
 		logrus.Infof("Received %s dispatch to connector %d", fullMethodName, connectorId)
 		errors := make(chan error)
 		call := &GrpcCall{
 			Method:    fullMethodName,
-			Agent:     angentId,
+			Agent:     agentId,
 			Connector: connectorId,
 			JobId:     jobId,
 			Alation: &UpstreamAlation{
@@ -133,7 +135,7 @@ type UpstreamAlation struct {
 }
 
 func (a *UpstreamAlation) SendError(s *status.Status) {
-	a.Error <- status.Error(s.Code(), s.Message())
+	a.Error <- s.Err()
 }
 
 type GrpcCall struct {

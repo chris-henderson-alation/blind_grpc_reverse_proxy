@@ -13,6 +13,8 @@ import (
 	"google.golang.org/grpc"
 )
 
+const ConnectorBasePort = 11000
+
 type Agent struct {
 	host   string
 	port   uint64
@@ -101,16 +103,20 @@ func (a *Agent) Dispatch(job *ioc.Job) {
 	for {
 		bookmark, shouldRetry = ioc.ReverseProxy(upstream, downstream, bookmark)
 		if shouldRetry {
-			logrus.Error("Failed! Trying again in a minute!")
-			time.Sleep(time.Minute)
-			panic("I dunno figure this out again in a bit")
-			//c = NewClient()
-			//upstream, err = c.Pipe(headers)
-			if err != nil {
-				panic("dunno, loops on loops")
+			for {
+				logrus.Error("Failed! Trying again in a minute!")
+				time.Sleep(time.Second * 10)
+				a.client = ioc.NewGrpcInverterClient(conn)
+				upstream, err = a.client.Pipe(headers)
+				if err != nil {
+					logrus.Error(err)
+					continue
+				}
+				break
 			}
 			logrus.Info("yoooo reconnected!")
 		} else {
+			logrus.Infof("Job complete %v", job)
 			return
 		}
 	}
@@ -124,7 +130,7 @@ func (a *Agent) fetchConnection(connectorId uint64) (*grpc.ClientConn, error) {
 		return conn, nil
 	}
 	var err error
-	conn, err = grpc.Dial(fmt.Sprintf("0.0.0.0:%d", connectorId+10000),
+	conn, err = grpc.Dial(fmt.Sprintf("0.0.0.0:%d", connectorId+ConnectorBasePort),
 		grpc.WithKeepaliveParams(KEEPALIVE_CLIENT_PARAMETERS),
 		grpc.WithInsecure())
 	if err != nil {

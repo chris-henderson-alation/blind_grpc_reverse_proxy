@@ -103,7 +103,7 @@ func NewEndangeredJob(call *GrpcCall, bookmark *ioc.Message) *EndangeredJob {
 }
 
 func (n *EndangeredJob) CountdownToDeath(parent *Agents) {
-	stopwatch := time.NewTicker(time.Second * 30)
+	stopwatch := time.NewTicker(time.Minute * 2)
 	select {
 	case <-n.stopCountdown:
 	case <-stopwatch.C:

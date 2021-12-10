@@ -3,7 +3,6 @@ package grpcinverter
 import (
 	"context"
 	"math/rand"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,12 +34,28 @@ func BenchmarkKilobyte(b *testing.B) {
 	testWithChunkSize(b, kilobyte)
 }
 
-func Benchmark15Kilobyte(b *testing.B) {
-	testWithChunkSize(b, kilobyte*15)
+func Benchmark2Kilobyte(b *testing.B) {
+	testWithChunkSize(b, kilobyte*2)
 }
 
-func Benchmark50Kilobyte(b *testing.B) {
-	testWithChunkSize(b, kilobyte*50)
+func Benchmark4Kilobyte(b *testing.B) {
+	testWithChunkSize(b, kilobyte*4)
+}
+
+func Benchmark8Kilobyte(b *testing.B) {
+	testWithChunkSize(b, kilobyte*8)
+}
+
+func Benchmark16Kilobyte(b *testing.B) {
+	testWithChunkSize(b, kilobyte*16)
+}
+
+func Benchmark32Kilobyte(b *testing.B) {
+	testWithChunkSize(b, kilobyte*32)
+}
+
+func Benchmark64Kilobyte(b *testing.B) {
+	testWithChunkSize(b, kilobyte*64)
 }
 
 func BenchmarkMegabyte(b *testing.B) {
@@ -54,12 +69,12 @@ func BenchmarkFourMegabyte(b *testing.B) {
 func testWithChunkSize(b *testing.B, chunkSize int) {
 	b.ReportAllocs()
 	b.SetBytes(gigabyte)
-	forward := NewForwardProxyFacade()
+	forward := NewForwardProxyFacade("0.0.0.0", "0.0.0.0")
 	agent := NewAgent(atomic.AddUint64(&agentId, 1), host, forward.external)
 	go agent.EventLoop()
 	defer agent.Stop()
 	defer forward.Stop()
-	connector := NewConnector(&PerfAgent{until: gigabyte})
+	connector := NewConnector(&PerfAgent{until: gigabyte}, "0.0.0.0")
 	connector.Start()
 	defer connector.Stop()
 	for {
@@ -113,13 +128,4 @@ func (p *PerfAgent) PerformanceBytes(s *TestBytes, server Test_PerformanceBytesS
 			panic(err)
 		}
 	}
-}
-
-func randomStringLength(l int) string {
-	length := rand.Intn(l)
-	s := strings.Builder{}
-	for i := 0; i < length; i++ {
-		s.WriteByte(byte(rand.Intn(42) + 48))
-	}
-	return s.String()
 }

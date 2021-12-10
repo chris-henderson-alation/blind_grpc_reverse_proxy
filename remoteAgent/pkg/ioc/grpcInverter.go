@@ -1,14 +1,11 @@
 package ioc // import "github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter"
 
 import (
+	"context"
 	"io"
 	"sync"
 
-	"google.golang.org/protobuf/types/known/structpb"
-
 	"github.com/sirupsen/logrus"
-
-	codes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	grpc "google.golang.org/grpc"
@@ -33,8 +30,9 @@ type Reverse interface {
 
 func ForwardProxy(alation Alation, agent Reverse, previousBookmark *Message) (*Message, bool) {
 	var bookmark *Message
-	alationFailed := make(chan struct{})
-	agentFailed := make(chan struct{})
+
+	agentFailureStatus, agentFailed := context.WithCancel(context.Background())
+	alationFailureStaus, alationFailed := context.WithCancel(context.Background())
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 	go func() {
@@ -50,7 +48,7 @@ func ForwardProxy(alation Alation, agent Reverse, previousBookmark *Message) (*M
 				// So the interesting thing here is that we have a message loaded into the barrel to send
 				// downstream. So let's hold onto that just in case the agent manages to reconnect.
 				bookmark = previousBookmark
-				close(agentFailed)
+				agentFailed()
 				logrus.Errorf("agent.Send(EOF) failed with %v, type %T", err, err)
 				return
 			}
@@ -68,17 +66,10 @@ func ForwardProxy(alation Alation, agent Reverse, previousBookmark *Message) (*M
 				msg = &Message{EOF: true}
 			default:
 				// Alation croaked!
-				close(alationFailed)
-				serr, _ := status.FromError(err)
-				details, _ := structpb.NewList(serr.Details())
-				e2 := agent.Send(&Message{
-					Error: &Error{
-						Code:        uint32(serr.Code()),
-						Description: serr.Message(),
-						Details:     details,
-					}})
+				alationFailed()
+				e2 := agent.Send(&Message{Error: ErrorFromGoError(err)})
 				if e2 != nil {
-					close(agentFailed)
+					agentFailed()
 					// and so did the agent, lol everything is on fire.
 					// I guess this can happen if the network is down for THIS
 					// node and Alation is on a different node entirely.
@@ -95,7 +86,7 @@ func ForwardProxy(alation Alation, agent Reverse, previousBookmark *Message) (*M
 				// So the interesting thing here is that we have a message loaded into the barrel to send
 				// downstream. So let's hold onto that just in case the agent manages to reconnect.
 				bookmark = &Message{EOF: true}
-				close(agentFailed)
+				agentFailed()
 				logrus.Errorf("agent.Send(EOF) failed with %v, type %T", err, err)
 			}
 			if msg.EOF {
@@ -118,7 +109,7 @@ func ForwardProxy(alation Alation, agent Reverse, previousBookmark *Message) (*M
 				// Uhhhh...uh oh. This is likely an internet connection failure. Here is where we have
 				// the opportunity to reconnect.
 				logrus.Error(err)
-				close(agentFailed)
+				agentFailed()
 				return
 			}
 			if body.Error != nil {
@@ -127,7 +118,7 @@ func ForwardProxy(alation Alation, agent Reverse, previousBookmark *Message) (*M
 				//
 				// Essentially this is a sad day for the connector, but this is still within the
 				// happy path for this little piece of routing code.
-				alation.SendError(status.New(codes.Code(body.Error.Code), body.Error.Description))
+				alation.SendError(body.Error.ToStatus())
 				return
 			}
 			e := alation.SendMsg(body.Body)
@@ -135,31 +126,25 @@ func ForwardProxy(alation Alation, agent Reverse, previousBookmark *Message) (*M
 				// Comms to upstream Alation has failed in some way. We have no way to reconnect
 				// the job at this point as Alation as already hung up, so let's shut things down.
 				logrus.Error(err)
-				close(alationFailed)
+				alationFailed()
 			}
 		}
 	}()
 	wg.Wait()
-	logrus.Info("done waiting")
-	select {
-	case <-alationFailed:
+	if alationFailureStaus.Err() != nil {
 		return nil, false
-	default:
 	}
-	select {
-	case <-agentFailed:
+	if agentFailureStatus.Err() != nil {
 		return bookmark, true
-	default:
 	}
-	logrus.Info("success!")
-	logrus.Info("suuuuupah success!")
 	return nil, false
 }
 
 func ReverseProxy(upstream Forward, connector Connector, previousBookmark *Message) (*Message, bool) {
 	var bookmark *Message
-	connectorFailed := make(chan struct{})
-	proxyFailed := make(chan struct{})
+	upstreamFailureStatus, upstreamFailed := context.WithCancel(context.Background())
+	connectorFailureStaus, connectorFailed := context.WithCancel(context.Background())
+
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 	// alation recv, connector send
@@ -184,7 +169,7 @@ func ReverseProxy(upstream Forward, connector Connector, previousBookmark *Messa
 			if err != nil {
 				// This can only be, for example EOF. It cannot contain actual error messages
 				logrus.Error(err)
-				close(connectorFailed)
+				connectorFailed()
 				return
 			}
 		}
@@ -201,7 +186,7 @@ func ReverseProxy(upstream Forward, connector Connector, previousBookmark *Messa
 				bookmark = previousBookmark
 				// @TODO forward proxy is down
 				logrus.Errorf("upstream.Send(msg) failed with %v, type %T", err, err)
-				close(proxyFailed)
+				upstreamFailed()
 				return
 			}
 		}
@@ -214,7 +199,7 @@ func ReverseProxy(upstream Forward, connector Connector, previousBookmark *Messa
 					bookmark = &Message{Body: msg}
 					// @TODO forward proxy is down
 					logrus.Errorf("upstream.Send(msg) failed with %v, type %T", e, e)
-					close(proxyFailed)
+					upstreamFailed()
 					return
 				}
 			case io.EOF:
@@ -227,25 +212,12 @@ func ReverseProxy(upstream Forward, connector Connector, previousBookmark *Messa
 				// We are technically the client in this scenario and clients
 				// cannot send errors in the world of gRPC. So we have to represent
 				// it ourselves.
-				serr, _ := status.FromError(err)
-				details, _ := structpb.NewList(serr.Details())
-				e := upstream.Send(&Message{
-					Error: &Error{
-						Code:        uint32(serr.Code()),
-						Description: serr.Message(),
-						Details:     details,
-					},
-				})
+				e := upstream.Send(&Message{Error: ErrorFromGoError(err)})
 				if e != nil {
-					bookmark = &Message{
-						Error: &Error{
-							Code:        uint32(serr.Code()),
-							Description: serr.Message(),
-						},
-					}
+					bookmark = &Message{Error: ErrorFromGoError(err)}
 					// @TODO forward proxy is down
 					logrus.Errorf("upstream.Send(resp) failed with %v, type %T", e, e)
-					close(proxyFailed)
+					upstreamFailed()
 					return
 				}
 				// This actually can't fail.
@@ -257,17 +229,11 @@ func ReverseProxy(upstream Forward, connector Connector, previousBookmark *Messa
 		}
 	}()
 	wg.Wait()
-	logrus.Info("done waiting")
-	select {
-	case <-connectorFailed:
+	if connectorFailureStaus.Err() != nil {
 		return nil, false
-	default:
 	}
-	select {
-	case <-proxyFailed:
+	if upstreamFailureStatus.Err() != nil {
 		return bookmark, true
-	default:
 	}
-	logrus.Info("success!")
 	return nil, false
 }

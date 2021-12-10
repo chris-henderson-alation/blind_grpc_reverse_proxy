@@ -23,6 +23,7 @@ type TestClient interface {
 	ClientStream(ctx context.Context, opts ...grpc.CallOption) (Test_ClientStreamClient, error)
 	Bidirectional(ctx context.Context, opts ...grpc.CallOption) (Test_BidirectionalClient, error)
 	IntentionalError(ctx context.Context, in *String, opts ...grpc.CallOption) (Test_IntentionalErrorClient, error)
+	ComplexType(ctx context.Context, in *ComplexPbType, opts ...grpc.CallOption) (*ComplexPbType, error)
 	Performance(ctx context.Context, in *String, opts ...grpc.CallOption) (Test_PerformanceClient, error)
 	PerformanceBytes(ctx context.Context, in *TestBytes, opts ...grpc.CallOption) (Test_PerformanceBytesClient, error)
 }
@@ -173,6 +174,15 @@ func (x *testIntentionalErrorClient) Recv() (*String, error) {
 	return m, nil
 }
 
+func (c *testClient) ComplexType(ctx context.Context, in *ComplexPbType, opts ...grpc.CallOption) (*ComplexPbType, error) {
+	out := new(ComplexPbType)
+	err := c.cc.Invoke(ctx, "/test.Test/ComplexType", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *testClient) Performance(ctx context.Context, in *String, opts ...grpc.CallOption) (Test_PerformanceClient, error) {
 	stream, err := c.cc.NewStream(ctx, &Test_ServiceDesc.Streams[4], "/test.Test/Performance", opts...)
 	if err != nil {
@@ -246,6 +256,7 @@ type TestServer interface {
 	ClientStream(Test_ClientStreamServer) error
 	Bidirectional(Test_BidirectionalServer) error
 	IntentionalError(*String, Test_IntentionalErrorServer) error
+	ComplexType(context.Context, *ComplexPbType) (*ComplexPbType, error)
 	Performance(*String, Test_PerformanceServer) error
 	PerformanceBytes(*TestBytes, Test_PerformanceBytesServer) error
 	mustEmbedUnimplementedTestServer()
@@ -269,6 +280,9 @@ func (UnimplementedTestServer) Bidirectional(Test_BidirectionalServer) error {
 }
 func (UnimplementedTestServer) IntentionalError(*String, Test_IntentionalErrorServer) error {
 	return status.Errorf(codes.Unimplemented, "method IntentionalError not implemented")
+}
+func (UnimplementedTestServer) ComplexType(context.Context, *ComplexPbType) (*ComplexPbType, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ComplexType not implemented")
 }
 func (UnimplementedTestServer) Performance(*String, Test_PerformanceServer) error {
 	return status.Errorf(codes.Unimplemented, "method Performance not implemented")
@@ -401,6 +415,24 @@ func (x *testIntentionalErrorServer) Send(m *String) error {
 	return x.ServerStream.SendMsg(m)
 }
 
+func _Test_ComplexType_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ComplexPbType)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TestServer).ComplexType(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/test.Test/ComplexType",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TestServer).ComplexType(ctx, req.(*ComplexPbType))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Test_Performance_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(String)
 	if err := stream.RecvMsg(m); err != nil {
@@ -453,6 +485,10 @@ var Test_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Unary",
 			Handler:    _Test_Unary_Handler,
+		},
+		{
+			MethodName: "ComplexType",
+			Handler:    _Test_ComplexType_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

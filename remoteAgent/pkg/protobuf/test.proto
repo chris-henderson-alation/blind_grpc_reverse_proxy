@@ -4,12 +4,15 @@ option go_package = ".;grpcinverter";
 
 package test;
 
+import "google/protobuf/struct.proto";
+
 service Test {
   rpc Unary(String) returns (String) {}
   rpc ServerStream(String) returns (stream String) {}
   rpc ClientStream(stream String) returns (String) {}
   rpc Bidirectional(stream String) returns (stream String) {}
   rpc IntentionalError(String) returns (stream String) {}
+  rpc ComplexType(ComplexPbType) returns (ComplexPbType) {}
   rpc Performance(String) returns (stream String) {}
   rpc PerformanceBytes(TestBytes) returns (stream TestBytes) {}
 }
@@ -20,4 +23,29 @@ message String {
 
 message TestBytes {
   bytes body = 1;
+}
+// This attempts to roughly cover the gamut of Protobuf features and data types
+// listed under https://developers.google.com/protocol-buffers/docs/proto3
+message ComplexPbType {
+  fixed64 scalar = 1;
+  repeated uint64 array = 2;
+  enum Enumeration {
+    VariantA = 0;
+    VariantB = 1;
+    VariantC = 2;
+    VariantD = 3;
+    reserved "VariantE";
+  }
+  Enumeration enumeration = 4;
+  google.protobuf.Struct struct = 5;
+  message Nested {
+    int32 value = 1;
+  }
+  Nested nested = 6;
+  oneof oneof {
+    string oneOfVariantA = 7;
+    int32 oneOfVariantB = 8;
+  }
+  map<int32, Nested> map = 9;
+  reserved 100 to 110;
 }
