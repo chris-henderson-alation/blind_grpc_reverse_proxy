@@ -44,7 +44,7 @@ func (proxy *ForwardProxy) JobTunnel(_ *empty.Empty, server ioc.GrpcInverter_Job
 	for {
 		select {
 		case <-server.Context().Done():
-			logrus.Println("context cancelled")
+			logrus.Info("it's gone my guy context cancelled")
 			proxy.agents.Unregister(agentId)
 			return nil
 		case job := <-jobs:
@@ -77,15 +77,11 @@ func (proxy *ForwardProxy) Pipe(agent ioc.GrpcInverter_PipeServer) error {
 	if err != nil {
 		return err
 	}
-	job, bookmark := proxy.agents.Retrieve(agentId, jobId)
+	job, _ := proxy.agents.Retrieve(agentId, jobId)
 	if job == nil {
 		return fmt.Errorf("nice catch blanco nino, but too bad your ass got saaaaaacked")
 	}
-	bookmark, shouldRetry := ioc.ForwardProxy(job.Alation, agent, bookmark)
-	if shouldRetry {
-		// put the job back in just case the agent calls back.
-		proxy.agents.Enqueue(job, bookmark)
-	}
+	ioc.ForwardProxy(job.Alation, agent)
 	return nil
 }
 

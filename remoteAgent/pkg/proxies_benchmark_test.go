@@ -27,7 +27,8 @@ const megabyte = kilobyte * 1024
 const gigabyte = megabyte * 1024
 
 func init() {
-	logrus.SetLevel(logrus.ErrorLevel)
+	logrus.SetReportCaller(true)
+	logrus.SetLevel(logrus.TraceLevel)
 }
 
 func BenchmarkKilobyte(b *testing.B) {
