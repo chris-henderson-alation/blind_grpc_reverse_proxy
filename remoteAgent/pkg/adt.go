@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter/ioc"
+	"github.com/sirupsen/logrus"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -14,21 +14,19 @@ import (
 type AgentId = uint64
 type JobId = uint64
 
-type Agents struct {
-	listeners    map[AgentId]chan *GrpcCall
-	awaitingJobs map[AgentId]*EndangeredJob
-	lock         sync.Mutex
+type ListenerMap struct {
+	listeners map[AgentId]chan *GrpcCall
+	lock      sync.Mutex
 }
 
-func NewAgents() *Agents {
-	return &Agents{
-		listeners:    map[AgentId]chan *GrpcCall{},
-		awaitingJobs: map[AgentId]*EndangeredJob{},
-		lock:         sync.Mutex{},
+func NewListenerMap() *ListenerMap {
+	return &ListenerMap{
+		listeners: map[AgentId]chan *GrpcCall{},
+		lock:      sync.Mutex{},
 	}
 }
 
-func (a *Agents) Register(agent AgentId) (chan *GrpcCall, bool) {
+func (a *ListenerMap) Register(agent AgentId) (chan *GrpcCall, bool) {
 	a.lock.Lock()
 	defer a.lock.Unlock()
 	if _, alreadyListening := a.listeners[agent]; alreadyListening {
@@ -39,20 +37,24 @@ func (a *Agents) Register(agent AgentId) (chan *GrpcCall, bool) {
 	return channel, false
 }
 
-func (a *Agents) Unregister(agent AgentId) {
+func (a *ListenerMap) Unregister(agent AgentId) {
 	a.lock.Lock()
 	delete(a.listeners, agent)
 	a.lock.Unlock()
 }
 
-func (a *Agents) Listening(agent AgentId) bool {
+func (a *ListenerMap) Listening(agent AgentId) bool {
 	a.lock.Lock()
 	_, listening := a.listeners[agent]
 	a.lock.Unlock()
 	return listening
 }
 
-func (a *Agents) Submit(call *GrpcCall) error {
+// Submit is used by the upstream recipient of Alation's gRPC requests to submit
+// the job to the agent listening channel.
+//
+// If no such agent is currently connected then an error is immediately returned describing as such.
+func (a *ListenerMap) Submit(call *GrpcCall) error {
 	a.lock.Lock()
 	listener, listening := a.listeners[call.Agent]
 	a.lock.Unlock()
@@ -63,53 +65,80 @@ func (a *Agents) Submit(call *GrpcCall) error {
 	return nil
 }
 
-func (a *Agents) Enqueue(call *GrpcCall, bookmark *ioc.Message) {
-	endangeredJob := NewEndangeredJob(call, bookmark)
+type PendingJobs struct {
+	pending map[AgentId]*EndangeredJob
+	lock    sync.Mutex
+}
+
+func NewPendingJobs() *PendingJobs {
+	return &PendingJobs{
+		pending: map[AgentId]*EndangeredJob{},
+		lock:    sync.Mutex{},
+	}
+}
+
+// Submit
+func (a *PendingJobs) Submit(call *GrpcCall) {
+	endangeredJob := NewEndangeredJob(call)
 	a.lock.Lock()
-	a.awaitingJobs[call.JobId] = endangeredJob
+	a.pending[call.JobId] = endangeredJob
 	a.lock.Unlock()
 	go endangeredJob.CountdownToDeath(a)
 }
 
-func (a *Agents) Retrieve(agentId AgentId, jobId JobId) (*GrpcCall, *ioc.Message) {
+// Retrieve removes and returns the GrpcCall associated with the agent ID and job ID.
+//
+// If no such job ID exists (possibly because the EndangeredJob timed out) then nil is returned.
+// If the job exists, but it is not associated with the given agent ID then nil is returned.
+func (a *PendingJobs) Retrieve(agentId AgentId, jobId JobId) *GrpcCall {
 	a.lock.Lock()
 	defer a.lock.Unlock()
-	job, ok := a.awaitingJobs[jobId]
+	job, ok := a.pending[jobId]
 	if !ok {
-		// @TODO
-		return nil, nil
+		return nil
 	}
 	if job.call.Agent != agentId {
-		// @TODO
-		return nil, nil
+		logrus.Warnf("agent %d attempted to access job %d, however job %d belongs to agent %d!",
+			agentId, jobId, jobId, job.call.Agent)
+		return nil
 	}
 	job.Rescue()
-	delete(a.awaitingJobs, jobId)
-	return job.call, job.bookmark
+	delete(a.pending, jobId)
+	return job.call
 }
 
+// EndangeredJob are jobs that the upstream Alation has requested and that the forward proxy has fed
+// into the agent. HOWEVER, there is a brief period of time in which we are waiting for the agent to establish
+// a new stream to send the results over. During that time, we do not know whether-or-not the agent will ever
+// successfully call us back to being streaming!
+//
+// As such, we record the upstream GrpcCall, which is keeping the stream to Alation open, and we patiently wait
+// for the agent to call back. If the agent does not callback within the configured tolerance then Alation
+// will be sent a plain gRPC error message informing it on what had happened.
 type EndangeredJob struct {
 	call          *GrpcCall
-	bookmark      *ioc.Message
 	stopCountdown chan struct{}
 }
 
-func NewEndangeredJob(call *GrpcCall, bookmark *ioc.Message) *EndangeredJob {
+func NewEndangeredJob(call *GrpcCall) *EndangeredJob {
 	return &EndangeredJob{
 		call:          call,
 		stopCountdown: make(chan struct{}),
-		bookmark:      bookmark,
 	}
 }
 
-func (n *EndangeredJob) CountdownToDeath(parent *Agents) {
+// CountdownToDeath is a dramatic name for a simple concept - the agent has two minutes to call back
+// or else it's job will be killed by the forward proxy and Alation will be sent a message as such.
+//
+// This grizzly fate cane be avoided by calling Rescue on the EndangeredJob.
+func (n *EndangeredJob) CountdownToDeath(parent *PendingJobs) {
 	stopwatch := time.NewTicker(time.Minute * 2)
 	select {
 	case <-n.stopCountdown:
 	case <-stopwatch.C:
 		parent.lock.Lock()
 		defer parent.lock.Unlock()
-		_, present := parent.awaitingJobs[n.call.JobId]
+		_, present := parent.pending[n.call.JobId]
 		if !present {
 			// This is technically possible if
 			// someone manages to snipe a call to Retrieve
@@ -121,8 +150,8 @@ func (n *EndangeredJob) CountdownToDeath(parent *Agents) {
 			// where our protagonist escapes death.
 			return
 		}
-		delete(parent.awaitingJobs, n.call.JobId)
-		n.call.SendError(status.New(codes.Unavailable, "agent failed to callback within time tolerance"))
+		delete(parent.pending, n.call.JobId)
+		n.call.Alation.SendError(status.New(codes.Unavailable, "agent failed to callback within time tolerance"))
 	}
 }
 func (n *EndangeredJob) Rescue() {

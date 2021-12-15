@@ -26,18 +26,16 @@ import (
 
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter/ioc"
-
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 )
 
-var alationFacingPort uint64 = 20000
-var agentFacingPort uint64 = 30000
+var alationFacingPort uint32 = 20000
+var agentFacingPort uint32 = 30000
 var connectorId uint64 = 0
 var agentId uint64 = 0
 
-var host = "0.0.0.0"
+var loopback = "0.0.0.0"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -58,7 +56,6 @@ func TestUnary(t *testing.T) {
 	stack := newStack(&UnaryConnector{mutation: mutation})
 	defer stack.Stop()
 	alation, agent, connector := stack.alation, stack.agent, stack.connector
-
 	unary, err := alation.Unary(
 		NewHeaderBuilder().
 			SetJobId(1).
@@ -93,9 +90,9 @@ func TestParallelUnary(t *testing.T) {
 	}
 	stack := newStack(&UnaryConnector{mutation: mutation})
 	defer stack.Stop()
-	for _, test := range testData {
+	for i, test := range testData {
 		t.Run(test.alationGives, func(t2 *testing.T) {
-			got, err := stack.alation.Unary(stack.Headers(context.Background()), &String{Message: test.alationGives})
+			got, err := stack.alation.Unary(stack.HeadersWithJobId(context.Background(), uint64(i+1)), &String{Message: test.alationGives})
 			if err != nil {
 				t2.Fatal(err)
 			}
@@ -347,6 +344,21 @@ func TestBidirectionalStream(t *testing.T) {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
+// Test when the connector is down.
+
+func TestConnectorDown(t *testing.T) {
+	stack := newStack(&UnimplementedTestServer{})
+	defer stack.Stop()
+	stack.connector.Stop()
+	resp, err := stack.alation.Unary(stack.Headers(context.Background()), &String{Message: "Nothing, please."})
+	t.Log(resp)
+	t.Log(err)
+	s, _ := status.FromError(err)
+	t.Log(s.Details())
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//
 // Test Header Passthrough
 
 type HeaderConnector struct {
@@ -445,7 +457,7 @@ func TestReconnect(t *testing.T) {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// Test Reconnect
+// Test Reconnect a Job Tunnel
 
 type BrokenTunnelTestConnector struct {
 	UnimplementedTestServer
@@ -480,7 +492,7 @@ func TestBrokenTunnel(t *testing.T) {
 			t.Fatal("not in time")
 		}
 		iters += 1
-		if stack.forward.agents.Listening(stack.agent.id) {
+		if stack.forward.listeners.Listening(stack.agent.id) {
 			break
 		}
 		time.Sleep(time.Millisecond * 100)
@@ -517,7 +529,7 @@ func TestBrokenTunnel(t *testing.T) {
 
 type TechStack struct {
 	alation   TestClient
-	forward   *ForwardFacade
+	forward   *ForwardProxy
 	agent     *Agent
 	connector *MockConnector
 }
@@ -536,31 +548,42 @@ func (t *TechStack) Headers(ctx context.Context) context.Context {
 		Build(ctx)
 }
 
+func (t *TechStack) HeadersWithJobId(ctx context.Context, jobId uint64) context.Context {
+	return NewHeaderBuilder().
+		SetJobId(jobId).
+		SetAgentId(t.agent.id).
+		SetConnectorId(t.connector.id).
+		Build(ctx)
+}
+
 func newStack(connector TestServer) *TechStack {
 	return newCustomNetworkingStack(connector, nil, nil, nil)
 }
 func newCustomNetworkingStack(connector TestServer, alationToForwardAddr, forwardToAgentAddr, agentToConnectorAddr *string) *TechStack {
 	if alationToForwardAddr == nil {
-		alationToForwardAddr = &host
+		alationToForwardAddr = &loopback
 	}
 	if forwardToAgentAddr == nil {
-		forwardToAgentAddr = &host
+		forwardToAgentAddr = &loopback
 	}
 	if agentToConnectorAddr == nil {
-		agentToConnectorAddr = &host
+		agentToConnectorAddr = &loopback
 	}
-	forward := NewForwardProxyFacade(*alationToForwardAddr, *forwardToAgentAddr)
-	agent := NewAgent(atomic.AddUint64(&agentId, 1), *forwardToAgentAddr, forward.external)
+	forward := NewForwardProxy(
+		*alationToForwardAddr, uint16(atomic.AddUint32(&alationFacingPort, 1)),
+		*forwardToAgentAddr, uint16(atomic.AddUint32(&agentFacingPort, 1)))
+	go forward.Start()
+	agent := NewAgent(atomic.AddUint64(&agentId, 1), *forwardToAgentAddr, forward.externalPort)
 	go agent.EventLoop()
 	for {
-		if forward.agents.Listening(agentId) {
+		if forward.listeners.Listening(agentId) {
 			break
 		}
 		time.Sleep(time.Millisecond * 100)
 	}
 	connectorServer := NewConnector(connector, *agentToConnectorAddr)
 	connectorServer.Start()
-	alation := NewAlationClient(forward.internal)
+	alation := NewAlationClient(forward.InternalAddress())
 	return &TechStack{
 		alation:   alation,
 		forward:   forward,
@@ -569,57 +592,8 @@ func newCustomNetworkingStack(connector TestServer, alationToForwardAddr, forwar
 	}
 }
 
-type ForwardFacade struct {
-	internal uint64
-	external uint64
-	i        *grpc.Server
-	e        *grpc.Server
-	agents   *Agents
-}
-
-func NewForwardProxyFacade(internalAddr, externalAddr string) *ForwardFacade {
-	forwardProxy := NewForwardProxy()
-	internalServer := grpc.NewServer(
-		grpc.KeepaliveParams(KEEPALIVE_SERVER_PARAMETERS),
-		grpc.KeepaliveEnforcementPolicy(KEEPALIVE_ENFORCEMENT_POLICY),
-		grpc.ForceServerCodec(NoopCodec{}),
-		grpc.UnknownServiceHandler(forwardProxy.StreamHandler()))
-	externalServer := grpc.NewServer(
-		grpc.KeepaliveParams(KEEPALIVE_SERVER_PARAMETERS),
-		grpc.KeepaliveEnforcementPolicy(KEEPALIVE_ENFORCEMENT_POLICY))
-	ioc.RegisterGrpcInverterServer(externalServer, forwardProxy)
-	internal := atomic.AddUint64(&alationFacingPort, 1)
-	internalListener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", internalAddr, internal))
-	if err != nil {
-		panic(err)
-	}
-	external := atomic.AddUint64(&agentFacingPort, 1)
-	externalListener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", externalAddr, external))
-	if err != nil {
-		panic(err)
-	}
-	go func() {
-		internalServer.Serve(internalListener)
-	}()
-	go func() {
-		externalServer.Serve(externalListener)
-	}()
-	return &ForwardFacade{
-		internal: internal,
-		external: external,
-		i:        internalServer,
-		e:        externalServer,
-		agents:   forwardProxy.agents,
-	}
-}
-
-func (f *ForwardFacade) Stop() {
-	f.i.Stop()
-	f.e.Stop()
-}
-
-func NewAlationClient(target uint64) TestClient {
-	conn, err := grpc.Dial(fmt.Sprintf("0.0.0.0:%d", target),
+func NewAlationClient(target string) TestClient {
+	conn, err := grpc.Dial(target,
 		grpc.WithInsecure(),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                time.Second * 30,

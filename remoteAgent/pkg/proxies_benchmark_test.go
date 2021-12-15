@@ -3,11 +3,7 @@ package grpcinverter
 import (
 	"context"
 	"math/rand"
-	"sync/atomic"
 	"testing"
-	"time"
-
-	"github.com/sirupsen/logrus"
 )
 
 // If we test exactly 1K blocks, we would generate exact multiples of
@@ -25,11 +21,6 @@ const almost8K = 8*1024 - 5
 const kilobyte = 1024
 const megabyte = kilobyte * 1024
 const gigabyte = megabyte * 1024
-
-func init() {
-	logrus.SetReportCaller(true)
-	logrus.SetLevel(logrus.TraceLevel)
-}
 
 func BenchmarkKilobyte(b *testing.B) {
 	testWithChunkSize(b, kilobyte)
@@ -68,23 +59,11 @@ func BenchmarkFourMegabyte(b *testing.B) {
 }
 
 func testWithChunkSize(b *testing.B, chunkSize int) {
+	DisableLogging()
 	b.ReportAllocs()
 	b.SetBytes(gigabyte)
-	forward := NewForwardProxyFacade("0.0.0.0", "0.0.0.0")
-	agent := NewAgent(atomic.AddUint64(&agentId, 1), host, forward.external)
-	go agent.EventLoop()
-	defer agent.Stop()
-	defer forward.Stop()
-	connector := NewConnector(&PerfAgent{until: gigabyte}, "0.0.0.0")
-	connector.Start()
-	defer connector.Stop()
-	for {
-		if forward.agents.Listening(agentId) {
-			break
-		}
-		time.Sleep(time.Millisecond * 200)
-	}
-	alation := NewAlationClient(forward.internal)
+	stack := newStack(&PerfAgent{until: gigabyte})
+	defer stack.Stop()
 	buf := make([]byte, chunkSize)
 	_, err := rand.Read(buf)
 	if err != nil {
@@ -92,7 +71,7 @@ func testWithChunkSize(b *testing.B, chunkSize int) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		benchmarkPerfStream(alation, agent.id, connector.id, buf, b)
+		benchmarkPerfStream(stack.alation, stack.agent.id, stack.connector.id, buf, b)
 	}
 }
 

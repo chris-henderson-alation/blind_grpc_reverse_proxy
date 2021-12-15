@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"sync"
 
-	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
+
+	"go.uber.org/zap"
 
 	"github.com/golang/protobuf/ptypes/empty"
 
@@ -20,7 +22,7 @@ const ConnectorBasePort = 11000
 
 type Agent struct {
 	host   string
-	port   uint64
+	port   uint16
 	id     uint64
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -30,7 +32,7 @@ type Agent struct {
 	connPool map[uint64]*grpc.ClientConn
 }
 
-func NewAgent(id uint64, host string, port uint64) *Agent {
+func NewAgent(id uint64, host string, port uint16) *Agent {
 	ctx, cancel := context.WithCancel(context.Background())
 	agent := &Agent{
 		host:     host,
@@ -45,21 +47,22 @@ func NewAgent(id uint64, host string, port uint64) *Agent {
 }
 
 func (a *Agent) EventLoop() {
+	LOGGER.Info("Beginning agent event loop")
 Init:
 	a.NewUpstreamClient()
 	jobs, err := a.client.JobTunnel(NewHeaderBuilder().SetAgentId(a.id).Build(a.ctx), &empty.Empty{})
 	if err != nil {
-		logrus.Warn(err)
+		LOGGER.Error("Client connection was established, however connecting to the job tunnel failed. Reconnected will be attempted.", zap.Error(err))
 		goto Init
 	}
 	for {
 		job, err := jobs.Recv()
 		if err != nil {
 			if a.Cancelled() {
-				logrus.Info("Agent shutting down.")
+				LOGGER.Info("Agent shutting down")
 				return
 			}
-			logrus.Warnf("Job tunnel shutdown with error %v, attempting reconnects.", err)
+			LOGGER.Error("The job tunnel appears to have been shutdown. Reconnects will be attempted.", zap.Error(err))
 			goto Init
 		}
 		go a.Dispatch(job)
@@ -67,9 +70,12 @@ Init:
 }
 
 func (a *Agent) Dispatch(job *ioc.Job) {
-	logrus.Infof("Received job %v", job)
 	//////////////////////////////////////////////
-	// Establish the callback name.
+	// Establish the callback stream.
+	LOGGER.Info("Received job, attempting to establish callback stream",
+		zap.String("method", job.Method),
+		zap.Uint64("connector", job.Connector),
+		zap.Uint64("job", job.JobID))
 	upstream, err := a.client.Pipe(NewHeaderBuilder().
 		SetConnectorId(job.Connector).
 		SetAgentId(a.id).
@@ -78,17 +84,33 @@ func (a *Agent) Dispatch(job *ioc.Job) {
 	if err != nil {
 		panic(err)
 	}
+	p, _ := peer.FromContext(upstream.Context())
+	LOGGER.Info("Established callback stream",
+		zap.String("method", job.Method),
+		zap.Uint64("connector", job.Connector),
+		zap.Uint64("job", job.JobID),
+		zap.String("proxyIP", p.Addr.String()))
 	//////////////////////////////////////////////
 	//////////////////////////////////////////////
 	// Retrieve or create the connection to the connector.
+	LOGGER.Info("Attempting to establish connection to downstream connector",
+		zap.String("method", job.Method),
+		zap.Uint64("connector", job.Connector),
+		zap.Uint64("job", job.JobID))
 	downstream, err := a.NewDownStreamClient(job.Connector, job.Method)
 	if err != nil {
-		e2 := upstream.Send(&ioc.Message{Error: a.connectorUnavailable(err)})
+		e2 := upstream.Send(&ioc.Message{Error: ConnectorDown.Fmt(err, a.id, job.Connector)})
 		if e2 != nil {
 			logrus.Errorf("Original %v second %v", err, err)
 		}
 		return
 	}
+	p, _ = peer.FromContext(downstream.Context())
+	LOGGER.Info("Connection established to downstream connector",
+		zap.String("method", job.Method),
+		zap.Uint64("connector", job.Connector),
+		zap.Uint64("job", job.JobID),
+		zap.String("connectorIP", p.Addr.String()))
 	//////////////////////////////////////////////
 	//////////////////////////////////////////////
 	// Begin proxying.
@@ -134,7 +156,7 @@ func (a *Agent) NewUpstreamClient() {
 	// have a maximum elapsed time, then you will have to handle the possible error return.
 	_ = backoff.Retry(func() error {
 		var err error
-		logrus.Warnf("Attempting connection to %s", target)
+		//logrus.Warnf("Attempting connection to %s", target)
 		conn, err = grpc.Dial(target,
 			grpc.WithInsecure(), // @TODO NOT INSECURE
 			grpc.WithBlock(),
@@ -157,12 +179,4 @@ func (a *Agent) Stop() {
 // Cancelled returns whether-or-not the Agent has received a shutdown signal.
 func (a *Agent) Cancelled() bool {
 	return a.ctx.Err() != nil
-}
-
-func (a *Agent) connectorUnavailable(err error) *ioc.Error {
-	e := ioc.ErrorFromGoError(err)
-	if e.Code == int32(codes.Unknown) {
-		e.Code = int32(codes.Unavailable)
-	}
-	return e
 }

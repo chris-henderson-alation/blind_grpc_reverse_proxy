@@ -4,6 +4,8 @@ import (
 	"io"
 	"sync"
 
+	"go.uber.org/zap"
+
 	"google.golang.org/grpc/codes"
 
 	"github.com/sirupsen/logrus"
@@ -12,24 +14,27 @@ import (
 	grpc "google.golang.org/grpc"
 )
 
-type Alation interface {
+var LOGGER *zap.Logger
+
+func SetLogger(logger *zap.Logger) {
+	LOGGER = logger
+}
+
+// ServerStreamWithError serves as a way for functions deeper in the callstack (namely the ForwardProxy function) to return
+// both values and a single optional error back upstream to Alation.
+//
+// This is because the ONLY opportunity to actually send an error to Alation is from the `error` return type of
+// ForwardProxy.GenericStreamHandler - you cannot send an error using just the provided grpc.ServerStream!
+type ServerStreamWithError struct {
 	grpc.ServerStream
-	SendError(*status.Status)
+	Error chan error
 }
 
-type Connector interface {
-	grpc.ClientStream
+func (a *ServerStreamWithError) SendError(s *status.Status) {
+	a.Error <- s.Err()
 }
 
-type Forward interface {
-	GrpcInverter_PipeClient
-}
-
-type Reverse interface {
-	GrpcInverter_PipeServer
-}
-
-func ForwardProxy(alation Alation, agent Reverse) {
+func ForwardProxy(alation ServerStreamWithError, agent GrpcInverter_PipeServer) {
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 	go func() {
@@ -77,9 +82,6 @@ func ForwardProxy(alation Alation, agent Reverse) {
 	go func() {
 		defer wg.Done()
 		for {
-			//s := time.Now()
-			//dead, ok := agent.Context().Deadline()
-			//logrus.Errorf("%v %v", dead, ok)
 			body, err := agent.Recv()
 			switch err {
 			case nil:
@@ -91,7 +93,6 @@ func ForwardProxy(alation Alation, agent Reverse) {
 			default:
 				// Uhhhh...uh oh. This is likely an internet connection failure. Here is where we have
 				// the opportunity to reconnect.
-				//logrus.Errorf("3 %f seconds", time.Now().Sub(s).Seconds())
 				logrus.Error(err)
 				alation.SendError(status.New(codes.Unavailable, "it aint up"))
 				return
@@ -105,7 +106,6 @@ func ForwardProxy(alation Alation, agent Reverse) {
 				alation.SendError(body.Error.ToStatus())
 				return
 			}
-			//logrus.Errorf("received %s", string(body.Body))
 			e := alation.SendMsg(body.Body)
 			if e != nil {
 				// Comms to upstream Alation has failed in some way. We have no way to reconnect
@@ -116,17 +116,14 @@ func ForwardProxy(alation Alation, agent Reverse) {
 		}
 	}()
 	wg.Wait()
-	logrus.Errorf("out")
 	return
 }
 
-func ReverseProxy(upstream Forward, connector Connector) {
-
+func ReverseProxy(upstream GrpcInverter_PipeClient, connector grpc.ClientStream) {
+	var bytesIn uint64 = 0
+	var bytesOut uint64 = 0
 	wg := sync.WaitGroup{}
 	wg.Add(2)
-	// alation recv, connector send
-	//
-	// This is from the perrspective of a client (alation) sending to a server (the connector)
 	go func() {
 		defer wg.Done()
 		for {
@@ -142,6 +139,7 @@ func ReverseProxy(upstream Forward, connector Connector) {
 				_ = connector.CloseSend()
 				return
 			}
+			bytesIn += uint64(len(body.Body))
 			err = connector.SendMsg(body.Body)
 			if err != nil {
 				// This can only be, for example EOF. It cannot contain actual error messages
@@ -150,9 +148,6 @@ func ReverseProxy(upstream Forward, connector Connector) {
 			}
 		}
 	}()
-	// connector recv, alation send
-	//
-	// This is from the perspective of a server (the connector) sending to a client (alation)
 	go func() {
 		defer wg.Done()
 		var msg []byte
@@ -160,13 +155,13 @@ func ReverseProxy(upstream Forward, connector Connector) {
 			err := connector.RecvMsg(&msg)
 			switch err {
 			case nil:
+				bytesOut += uint64(len(msg))
 				e := upstream.Send(&Message{Body: msg})
 				if e != nil {
 					// @TODO forward proxy is down
 					logrus.Errorf("upstream.Send(msg) failed with %v, type %T", e, e)
 					return
 				}
-				//logrus.Errorf("Sent %v", string(msg))
 			case io.EOF:
 				// This actually can't fail.
 				//
@@ -192,5 +187,7 @@ func ReverseProxy(upstream Forward, connector Connector) {
 		}
 	}()
 	wg.Wait()
-	logrus.Error("good night")
+	LOGGER.Info("Stream complete",
+		zap.Uint64("bytesFromAlation", bytesIn),
+		zap.Uint64("bytesFromConnector", bytesOut))
 }
