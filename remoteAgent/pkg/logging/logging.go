@@ -4,11 +4,9 @@ import (
 	"context"
 	"sync"
 
-	"google.golang.org/grpc/peer"
-
-	"go.uber.org/zap/zapcore"
-
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"google.golang.org/grpc/peer"
 )
 
 var LOGGER *zap.Logger

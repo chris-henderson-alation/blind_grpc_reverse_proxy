@@ -3,7 +3,7 @@ package reverse
 import (
 	"fmt"
 
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/protocol"
+	"github.com/Alation/alation_connector_manager/remoteAgent/protocol"
 	"github.com/golang/protobuf/ptypes/any"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

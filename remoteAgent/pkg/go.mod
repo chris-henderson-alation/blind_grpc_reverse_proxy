@@ -1,4 +1,4 @@
-module github.com/Alation/alation_connector_manager/docker/remoteAgent
+module github.com/Alation/alation_connector_manager/remoteAgent
 
 go 1.17
 

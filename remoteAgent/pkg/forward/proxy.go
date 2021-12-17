@@ -6,10 +6,9 @@ import (
 	"net"
 	"sync"
 
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/shared"
-
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/logging"
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/protocol"
+	"github.com/Alation/alation_connector_manager/remoteAgent/logging"
+	"github.com/Alation/alation_connector_manager/remoteAgent/protocol"
+	"github.com/Alation/alation_connector_manager/remoteAgent/shared"
 	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"

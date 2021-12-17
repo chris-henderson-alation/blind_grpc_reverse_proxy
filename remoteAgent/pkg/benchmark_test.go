@@ -5,8 +5,8 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/logging"
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/shared"
+	"github.com/Alation/alation_connector_manager/remoteAgent/logging"
+	"github.com/Alation/alation_connector_manager/remoteAgent/shared"
 )
 
 const kilobyte = 1024

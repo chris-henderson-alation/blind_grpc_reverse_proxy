@@ -4,9 +4,9 @@ import (
 	"io"
 	"sync"
 
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/logging"
+	"github.com/Alation/alation_connector_manager/remoteAgent/logging"
 	"go.uber.org/zap"
-	grpc "google.golang.org/grpc"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

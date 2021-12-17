@@ -5,17 +5,16 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/shared"
-
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/logging"
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/protocol"
+	"github.com/Alation/alation_connector_manager/remoteAgent/logging"
+	"github.com/Alation/alation_connector_manager/remoteAgent/protocol"
+	"github.com/Alation/alation_connector_manager/remoteAgent/shared"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/golang/protobuf/ptypes/empty"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
 
-const ConnectorBasePort = 11000
+const ConnectorBasePort = 10000
 
 type Agent struct {
 	host   string

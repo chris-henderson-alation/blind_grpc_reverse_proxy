@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"fmt"
-
 	spb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc/status"
 )
