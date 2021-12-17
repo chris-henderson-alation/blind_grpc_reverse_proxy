@@ -1,4 +1,4 @@
-package grpcinverter
+package shared
 
 import (
 	"context"
@@ -49,15 +49,15 @@ func ExtractHeader(header string, ctx context.Context) (string, error) {
 }
 
 type HeaderBuilder struct {
-	headers map[string]string
+	Headers map[string]string
 }
 
 func NewHeaderBuilder() *HeaderBuilder {
-	return &HeaderBuilder{headers: map[string]string{}}
+	return &HeaderBuilder{Headers: map[string]string{}}
 }
 
 func (h *HeaderBuilder) Build(ctx context.Context) context.Context {
-	return metadata.NewOutgoingContext(ctx, metadata.New(h.headers))
+	return metadata.NewOutgoingContext(ctx, metadata.New(h.Headers))
 }
 
 func (h *HeaderBuilder) SetConnectorId(value uint64) *HeaderBuilder {
@@ -77,6 +77,6 @@ func (h *HeaderBuilder) SetUint64Header(header string, value uint64) *HeaderBuil
 }
 
 func (h *HeaderBuilder) SetHeader(header, value string) *HeaderBuilder {
-	h.headers[header] = value
+	h.Headers[header] = value
 	return h
 }

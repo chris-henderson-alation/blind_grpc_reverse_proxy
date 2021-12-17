@@ -1,7 +1,13 @@
-package grpcinverter
+package remoteAgent
 
 import (
 	"context"
+
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/reverse"
+
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/shared"
+
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/forward"
 
 	"github.com/cenkalti/backoff/v4"
 
@@ -19,18 +25,13 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/grpc/metadata"
-
-	"google.golang.org/grpc/codes"
-
-	"google.golang.org/grpc/status"
-
 	"github.com/golang/protobuf/proto"
-
-	"google.golang.org/protobuf/types/known/structpb"
-
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 var alationFacingPort uint32 = 20000
@@ -60,9 +61,9 @@ func TestUnary(t *testing.T) {
 	defer stack.Stop()
 	alation, agent, connector := stack.alation, stack.agent, stack.connector
 	unary, err := alation.Unary(
-		NewHeaderBuilder().
+		shared.NewHeaderBuilder().
 			SetJobId(1).
-			SetAgentId(agent.id).
+			SetAgentId(agent.Id).
 			SetConnectorId(connector.id).
 			Build(context.Background()),
 		&String{Message: input})
@@ -360,7 +361,7 @@ func TestMultipleAgents(t *testing.T) {
 	}
 	numAgents := 50
 	// Test for 100 agents connected at once
-	agents := make([]*Agent, numAgents)
+	agents := make([]*reverse.Agent, numAgents)
 	for i := 0; i < numAgents; i++ {
 		agent := newAgent(stack.forward)
 		defer agent.Stop()
@@ -377,9 +378,9 @@ func TestMultipleAgents(t *testing.T) {
 					connectorAdds: mutation,
 					want:          fmt.Sprintf("%s%s", alationGives, mutation),
 				}
-				got, err := stack.alation.Unary(NewHeaderBuilder().
+				got, err := stack.alation.Unary(shared.NewHeaderBuilder().
 					SetJobId(atomic.AddUint64(&jobId, 1)).
-					SetAgentId(agent.id).
+					SetAgentId(agent.Id).
 					SetConnectorId(stack.connector.id).
 					Build(context.Background()), &String{Message: test.alationGives})
 				if err != nil {
@@ -433,11 +434,11 @@ func TestHeaders(t *testing.T) {
 	connector := &HeaderConnector{}
 	stack := newStack(connector)
 	defer stack.Stop()
-	builder := NewHeaderBuilder().
+	builder := shared.NewHeaderBuilder().
 		SetJobId(1).
-		SetAgentId(stack.agent.id).
+		SetAgentId(stack.agent.Id).
 		SetConnectorId(stack.connector.id)
-	md := metadata.New(builder.headers)
+	md := metadata.New(builder.Headers)
 	connector.want = md
 	_, err := stack.alation.Unary(metadata.NewOutgoingContext(context.Background(), md), &String{Message: "cool headers"})
 	if err != nil {
@@ -543,7 +544,7 @@ func TestBrokenTunnel(t *testing.T) {
 			t.Fatal("not in time")
 		}
 		iters += 1
-		if stack.forward.listeners.Listening(stack.agent.id) {
+		if stack.forward.Listeners.Listening(stack.agent.Id) {
 			break
 		}
 		time.Sleep(time.Millisecond * 100)
@@ -580,8 +581,8 @@ func TestBrokenTunnel(t *testing.T) {
 
 type TechStack struct {
 	alation   TestClient
-	forward   *ForwardProxy
-	agent     *Agent
+	forward   *forward.Proxy
+	agent     *reverse.Agent
 	connector *MockConnector
 }
 
@@ -592,17 +593,17 @@ func (t *TechStack) Stop() {
 }
 
 func (t *TechStack) Headers(ctx context.Context) context.Context {
-	return NewHeaderBuilder().
+	return shared.NewHeaderBuilder().
 		SetJobId(1).
-		SetAgentId(t.agent.id).
+		SetAgentId(t.agent.Id).
 		SetConnectorId(t.connector.id).
 		Build(ctx)
 }
 
 func (t *TechStack) HeadersWithJobId(ctx context.Context, jobId uint64) context.Context {
-	return NewHeaderBuilder().
+	return shared.NewHeaderBuilder().
 		SetJobId(jobId).
-		SetAgentId(t.agent.id).
+		SetAgentId(t.agent.Id).
 		SetConnectorId(t.connector.id).
 		Build(ctx)
 }
@@ -621,7 +622,7 @@ func newCustomNetworkingStack(connector TestServer, alationToForwardAddr, forwar
 	if agentToConnectorAddr == nil {
 		agentToConnectorAddr = &loopback
 	}
-	forward := NewForwardProxy(
+	forward := forward.NewProxy(
 		*alationToForwardAddr, uint16(atomic.AddUint32(&alationFacingPort, 1)),
 		*forwardToAgentAddr, uint16(atomic.AddUint32(&agentFacingPort, 1)))
 	go func() {
@@ -641,13 +642,13 @@ func newCustomNetworkingStack(connector TestServer, alationToForwardAddr, forwar
 	}
 }
 
-func newAgent(target *ForwardProxy) *Agent {
-	agent := NewAgent(atomic.AddUint64(&agentId, 1), target.externalAddr, target.externalPort)
+func newAgent(target *forward.Proxy) *reverse.Agent {
+	agent := reverse.NewAgent(atomic.AddUint64(&agentId, 1), target.ExternalAddr, target.ExternalPort)
 	go func() {
 		agent.EventLoop()
 	}()
 	err := backoff.Retry(func() error {
-		if target.listeners.Listening(agentId) {
+		if target.Listeners.Listening(agentId) {
 			return nil
 		}
 		return fmt.Errorf("not yet connected")
@@ -681,8 +682,8 @@ func NewAlationClient(target string) TestClient {
 func NewConnector(connector TestServer, addr string) *MockConnector {
 	id := atomic.AddUint64(&connectorId, 1)
 	s := grpc.NewServer(
-		grpc.KeepaliveParams(KEEPALIVE_SERVER_PARAMETERS),
-		grpc.KeepaliveEnforcementPolicy(KEEPALIVE_ENFORCEMENT_POLICY))
+		grpc.KeepaliveParams(shared.KEEPALIVE_SERVER_PARAMETERS),
+		grpc.KeepaliveEnforcementPolicy(shared.KEEPALIVE_ENFORCEMENT_POLICY))
 	RegisterTestServer(s, connector)
 	return &MockConnector{id: id, server: s, TestServer: connector, addr: addr}
 }
@@ -699,7 +700,7 @@ func (c *MockConnector) Stop() {
 }
 
 func (c *MockConnector) Start() {
-	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", c.addr, ConnectorBasePort+c.id))
+	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", c.addr, reverse.ConnectorBasePort+c.id))
 	if err != nil {
 		panic(err)
 	}

@@ -1,4 +1,4 @@
-package grpcinverter
+package shared
 
 // NoopCodec is used via the grpc.ForceCodec call option and grpc.ForceServerCodec server option.
 //

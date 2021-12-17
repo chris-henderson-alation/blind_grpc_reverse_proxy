@@ -1,4 +1,4 @@
-module github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter
+module github.com/Alation/alation_connector_manager/docker/remoteAgent
 
 go 1.17
 

@@ -1,24 +1,13 @@
-package grpcinverter
+package remoteAgent
 
 import (
 	"context"
 	"math/rand"
 	"testing"
 
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter/logging"
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/logging"
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/shared"
 )
-
-// If we test exactly 1K blocks, we would generate exact multiples of
-
-// the cipher's block size, and the cipher stream fragments would
-
-// always be wordsize aligned, whereas non-aligned is a more typical
-
-// use-case.
-
-const almost1K = 1024 - 5
-
-const almost8K = 8*1024 - 5
 
 const kilobyte = 1024
 const megabyte = kilobyte * 1024
@@ -73,12 +62,12 @@ func testWithChunkSize(b *testing.B, chunkSize int) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		benchmarkPerfStream(stack.alation, stack.agent.id, stack.connector.id, buf, b)
+		benchmarkPerfStream(stack.alation, stack.agent.Id, stack.connector.id, buf, b)
 	}
 }
 
 func benchmarkPerfStream(alation TestClient, agentId, connectorId uint64, body []byte, b *testing.B) {
-	perf, err := alation.PerformanceBytes(NewHeaderBuilder().
+	perf, err := alation.PerformanceBytes(shared.NewHeaderBuilder().
 		SetJobId(1).
 		SetAgentId(agentId).
 		SetConnectorId(connectorId).

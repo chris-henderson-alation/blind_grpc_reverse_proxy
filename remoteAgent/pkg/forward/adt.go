@@ -1,4 +1,4 @@
-package grpcinverter
+package forward
 
 import (
 	"fmt"

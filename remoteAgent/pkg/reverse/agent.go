@@ -1,12 +1,14 @@
-package grpcinverter
+package reverse
 
 import (
 	"context"
 	"fmt"
 	"sync"
 
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter/ioc"
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter/logging"
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/shared"
+
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/logging"
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/protocol"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/golang/protobuf/ptypes/empty"
 	"go.uber.org/zap"
@@ -18,10 +20,10 @@ const ConnectorBasePort = 11000
 type Agent struct {
 	host   string
 	port   uint16
-	id     uint64
+	Id     uint64
 	ctx    context.Context
 	cancel context.CancelFunc
-	client ioc.GrpcInverterClient
+	client protocol.GrpcInverterClient
 
 	lock     sync.Mutex
 	connPool map[uint64]*grpc.ClientConn
@@ -32,7 +34,7 @@ func NewAgent(id uint64, host string, port uint16) *Agent {
 	agent := &Agent{
 		host:     host,
 		port:     port,
-		id:       id,
+		Id:       id,
 		ctx:      ctx,
 		cancel:   cancel,
 		lock:     sync.Mutex{},
@@ -45,7 +47,7 @@ func (a *Agent) EventLoop() {
 	logging.LOGGER.Info("Beginning agent event loop")
 Init:
 	a.NewUpstreamClient()
-	jobs, err := a.client.JobTunnel(NewHeaderBuilder().SetAgentId(a.id).Build(a.ctx), &empty.Empty{})
+	jobs, err := a.client.JobTunnel(shared.NewHeaderBuilder().SetAgentId(a.Id).Build(a.ctx), &empty.Empty{})
 	if err != nil {
 		logging.LOGGER.Error("Client connection was established, however connecting to the job tunnel failed. Reconnected will be attempted.", zap.Error(err))
 		goto Init
@@ -64,16 +66,16 @@ Init:
 	}
 }
 
-func (a *Agent) Dispatch(job *ioc.Job) {
+func (a *Agent) Dispatch(job *protocol.Job) {
 	//////////////////////////////////////////////
 	// Establish the callback stream.
 	logging.LOGGER.Info("Received job, attempting to establish callback stream",
 		logging.Method(job.Method),
 		logging.Connector(job.Connector),
 		logging.Job(job.JobID))
-	upstream, err := a.client.Pipe(NewHeaderBuilder().
+	upstream, err := a.client.Pipe(shared.NewHeaderBuilder().
 		SetConnectorId(job.Connector).
-		SetAgentId(a.id).
+		SetAgentId(a.Id).
 		SetJobId(job.JobID).
 		Build(context.Background()))
 	if err != nil {
@@ -93,7 +95,7 @@ func (a *Agent) Dispatch(job *ioc.Job) {
 		logging.Job(job.JobID))
 	downstream, err := a.NewDownStreamClient(job.Connector, job.Method)
 	if err != nil {
-		e2 := upstream.Send(&ioc.Message{Error: ConnectorDown.Fmt(err, a.id, job.Connector)})
+		e2 := upstream.Send(&protocol.Message{Error: ConnectorDown.Fmt(err, a.Id, job.Connector)})
 		if e2 != nil {
 			// @TODO
 			logging.LOGGER.Error("bad and worse")
@@ -113,7 +115,7 @@ func (a *Agent) Dispatch(job *ioc.Job) {
 		logging.Job(job.JobID),
 		logging.PeerProxy(upstream.Context()),
 		logging.PeerConnector(downstream.Context()))
-	ioc.ReverseProxy(upstream, downstream, logger)
+	protocol.ReverseProxy(upstream, downstream, logger)
 }
 
 func (a *Agent) NewDownStreamClient(connectorId uint64, method string) (grpc.ClientStream, error) {
@@ -125,7 +127,7 @@ func (a *Agent) NewDownStreamClient(connectorId uint64, method string) (grpc.Cli
 			return conn, nil
 		}
 		conn, err := grpc.Dial(fmt.Sprintf("0.0.0.0:%d", connectorId+ConnectorBasePort),
-			grpc.WithKeepaliveParams(KEEPALIVE_CLIENT_PARAMETERS),
+			grpc.WithKeepaliveParams(shared.KEEPALIVE_CLIENT_PARAMETERS),
 			grpc.WithInsecure())
 		if err != nil {
 			return nil, err
@@ -136,7 +138,7 @@ func (a *Agent) NewDownStreamClient(connectorId uint64, method string) (grpc.Cli
 	if err != nil {
 		return nil, err
 	}
-	return conn.NewStream(context.Background(), BIDIRECTIONAL_STREAM_DESC, method, grpc.ForceCodec(NoopCodec{}))
+	return conn.NewStream(context.Background(), shared.BIDIRECTIONAL_STREAM_DESC, method, grpc.ForceCodec(shared.NoopCodec{}))
 }
 
 func (a *Agent) NewUpstreamClient() {
@@ -158,13 +160,13 @@ func (a *Agent) NewUpstreamClient() {
 		conn, err = grpc.Dial(target,
 			grpc.WithInsecure(), // @TODO NOT INSECURE
 			grpc.WithBlock(),
-			grpc.WithKeepaliveParams(KEEPALIVE_CLIENT_PARAMETERS))
+			grpc.WithKeepaliveParams(shared.KEEPALIVE_CLIENT_PARAMETERS))
 		if err != nil {
 			return err
 		}
 		return nil
-	}, RECONNECT_EXP_BACKOFF_CONFIG)
-	a.client = ioc.NewGrpcInverterClient(conn)
+	}, shared.RECONNECT_EXP_BACKOFF_CONFIG)
+	a.client = protocol.NewGrpcInverterClient(conn)
 	a.lock.Unlock()
 }
 

@@ -1,10 +1,10 @@
-package ioc // import "github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter"
+package protocol
 
 import (
 	"io"
 	"sync"
 
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter/logging"
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/logging"
 	"go.uber.org/zap"
 	grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

@@ -1,4 +1,4 @@
-package grpcinverter
+package forward
 
 import (
 	"context"
@@ -6,70 +6,68 @@ import (
 	"net"
 	"sync"
 
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/shared"
+
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/logging"
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/protocol"
+	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/pkg/errors"
-
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter/logging"
-
-	"github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter/ioc"
-
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-
-	"github.com/golang/protobuf/ptypes/empty"
 )
 
-type ForwardProxy struct {
-	listeners *ListenerMap
+type Proxy struct {
+	Listeners *ListenerMap
 	pending   *PendingJobs
 
 	internalAddr string
 	internalPort uint16
-	externalAddr string
-	externalPort uint16
+	ExternalAddr string
+	ExternalPort uint16
 
 	internal *grpc.Server
 	external *grpc.Server
-	ioc.UnimplementedGrpcInverterServer
+	protocol.UnimplementedGrpcInverterServer
 
 	ctx  context.Context
 	stop context.CancelFunc
 }
 
-func NewForwardProxy(internalAddr string, internalPort uint16, externalAddr string, externalPort uint16) *ForwardProxy {
+func NewProxy(internalAddr string, internalPort uint16, externalAddr string, externalPort uint16) *Proxy {
 	ctx, stop := context.WithCancel(context.Background())
-	forwardProxy := &ForwardProxy{
+	forwardProxy := &Proxy{
 		internalAddr: internalAddr,
 		internalPort: internalPort,
-		externalAddr: externalAddr,
-		externalPort: externalPort,
-		listeners:    NewListenerMap(),
+		ExternalAddr: externalAddr,
+		ExternalPort: externalPort,
+		Listeners:    NewListenerMap(),
 		pending:      NewPendingJobs(),
 		ctx:          ctx,
 		stop:         stop,
 	}
 	internalServer := grpc.NewServer(
-		grpc.KeepaliveParams(KEEPALIVE_SERVER_PARAMETERS),
-		grpc.KeepaliveEnforcementPolicy(KEEPALIVE_ENFORCEMENT_POLICY),
-		grpc.ForceServerCodec(NoopCodec{}),
+		grpc.KeepaliveParams(shared.KEEPALIVE_SERVER_PARAMETERS),
+		grpc.KeepaliveEnforcementPolicy(shared.KEEPALIVE_ENFORCEMENT_POLICY),
+		grpc.ForceServerCodec(shared.NoopCodec{}),
 		grpc.UnknownServiceHandler(forwardProxy.GenericStreamHandler()))
 	externalServer := grpc.NewServer(
-		grpc.KeepaliveParams(KEEPALIVE_SERVER_PARAMETERS),
-		grpc.KeepaliveEnforcementPolicy(KEEPALIVE_ENFORCEMENT_POLICY))
-	ioc.RegisterGrpcInverterServer(externalServer, forwardProxy)
+		grpc.KeepaliveParams(shared.KEEPALIVE_SERVER_PARAMETERS),
+		grpc.KeepaliveEnforcementPolicy(shared.KEEPALIVE_ENFORCEMENT_POLICY))
+	protocol.RegisterGrpcInverterServer(externalServer, forwardProxy)
 	forwardProxy.internal = internalServer
 	forwardProxy.external = externalServer
 	return forwardProxy
 }
 
-func (proxy *ForwardProxy) JobTunnel(_ *empty.Empty, agent ioc.GrpcInverter_JobTunnelServer) error {
-	agentId, err := ExtractAgentId(agent.Context())
+func (proxy *Proxy) JobTunnel(_ *empty.Empty, agent protocol.GrpcInverter_JobTunnelServer) error {
+	agentId, err := shared.ExtractAgentId(agent.Context())
 	if err != nil {
 		// @TODO Don't try too hard here, this will get replaced by looking up the contents of the cert.
 		logging.LOGGER.Error("An agent failed to identify itself", logging.PeerAgent(agent.Context()))
 		return err
 	}
-	jobs := proxy.listeners.Register(agentId)
+	jobs := proxy.Listeners.Register(agentId)
 	if jobs == nil {
 		logging.LOGGER.Warn("An agent attempted to connect to the job tunnel, however an agent with its ID is already registered",
 			logging.Agent(agentId),
@@ -83,14 +81,14 @@ func (proxy *ForwardProxy) JobTunnel(_ *empty.Empty, agent ioc.GrpcInverter_JobT
 		select {
 		case <-agent.Context().Done():
 			logger.Info("An agent has disconnected from its job tunnel")
-			proxy.listeners.Unregister(agentId)
+			proxy.Listeners.Unregister(agentId)
 			return nil
 		case job := <-jobs:
 			logger.Info("Sending job to agent",
 				logging.Method(job.Method),
 				logging.Connector(job.Connector),
 				logging.Job(job.JobId))
-			err := agent.Send(&ioc.Job{
+			err := agent.Send(&protocol.Job{
 				JobID:     job.JobId,
 				Method:    job.Method,
 				Connector: job.Connector,
@@ -120,12 +118,12 @@ func (proxy *ForwardProxy) JobTunnel(_ *empty.Empty, agent ioc.GrpcInverter_JobT
 
 // Pipe is the endpoint that an agent calls back to to begin piping job results
 // from the connector and back up to Alation.
-func (proxy *ForwardProxy) Pipe(agent ioc.GrpcInverter_PipeServer) error {
-	agentId, err := ExtractAgentId(agent.Context())
+func (proxy *Proxy) Pipe(agent protocol.GrpcInverter_PipeServer) error {
+	agentId, err := shared.ExtractAgentId(agent.Context())
 	if err != nil {
 		return err
 	}
-	jobId, err := ExtractJobId(agent.Context())
+	jobId, err := shared.ExtractJobId(agent.Context())
 	if err != nil {
 		return err
 	}
@@ -141,7 +139,7 @@ func (proxy *ForwardProxy) Pipe(agent ioc.GrpcInverter_PipeServer) error {
 		logging.PeerAlation(job.Alation.Context()),
 		logging.PeerAgent(agent.Context()))
 	jobLogger.Info("Agent established callback stream")
-	ioc.ForwardProxy(job.Alation, agent, jobLogger)
+	protocol.ForwardProxy(job.Alation, agent, jobLogger)
 	return nil
 }
 
@@ -149,12 +147,12 @@ func (proxy *ForwardProxy) Pipe(agent ioc.GrpcInverter_PipeServer) error {
 // gRPC server as the fallback "UnknownServiceHandler". This means that any request that comes
 // in that cannot be handled by any other registered gRPC server is instead forwarded to this stream handler.
 //
-// In our particular case, that is all of them! The ForwardProxy does not register any other gRPC service, meaning
+// In our particular case, that is all of them! The Proxy does not register any other gRPC service, meaning
 // that this handler receives any-and-all incoming gRPC requests regardless of their original protobuf definitions.
 //
 // This is critical to our scheme as we need to be able to accept ANY incoming gRPC request without having to maintain
 // symmetric protobuf definitions (which would be an egregious maintenance burden for us all).
-func (proxy *ForwardProxy) GenericStreamHandler() grpc.StreamHandler {
+func (proxy *Proxy) GenericStreamHandler() grpc.StreamHandler {
 	return func(_ interface{}, upstream grpc.ServerStream) error {
 		grpcMethod, ok := grpc.MethodFromServerStream(upstream)
 		if !ok {
@@ -162,30 +160,30 @@ func (proxy *ForwardProxy) GenericStreamHandler() grpc.StreamHandler {
 				logging.PeerAlation(upstream.Context()))
 			return status.Error(codes.Internal, "@TODO this is comically fatal")
 		}
-		agentId, err := ExtractAgentId(upstream.Context())
+		agentId, err := shared.ExtractAgentId(upstream.Context())
 		if err != nil {
 			logging.LOGGER.Error("No agent header was attached to the incoming request",
 				logging.Method(grpcMethod),
-				logging.Wanted(AgentIdHeader),
+				logging.Wanted(shared.AgentIdHeader),
 				logging.PeerAlation(upstream.Context()))
 			return err
 		}
-		connectorId, err := ExtractConnectorId(upstream.Context())
+		connectorId, err := shared.ExtractConnectorId(upstream.Context())
 		if err != nil {
 			logging.LOGGER.Error("No connector header was attached to the incoming request",
 				logging.Method(grpcMethod),
 				logging.Agent(agentId),
-				logging.Wanted(ConnectorIdHeader),
+				logging.Wanted(shared.ConnectorIdHeader),
 				logging.PeerAlation(upstream.Context()))
 			return err
 		}
-		jobId, err := ExtractJobId(upstream.Context())
+		jobId, err := shared.ExtractJobId(upstream.Context())
 		if err != nil {
 			logging.LOGGER.Error("No job header was attached to the incoming request",
 				logging.Method(grpcMethod),
 				logging.Agent(agentId),
 				logging.Connector(connectorId),
-				logging.Wanted(JobIdHeader),
+				logging.Wanted(shared.JobIdHeader),
 				logging.PeerAlation(upstream.Context()))
 			return err
 		}
@@ -201,7 +199,7 @@ func (proxy *ForwardProxy) GenericStreamHandler() grpc.StreamHandler {
 			Agent:     agentId,
 			Connector: connectorId,
 			JobId:     jobId,
-			Alation: ioc.ServerStreamWithError{
+			Alation: protocol.ServerStreamWithError{
 				ServerStream: upstream,
 				Error:        errors,
 			},
@@ -224,15 +222,17 @@ func (proxy *ForwardProxy) GenericStreamHandler() grpc.StreamHandler {
 
 // Submit submits a job to the listening agent. If the agent is not currently connected
 // then callers will receive an error immediately informing them as such.
-func (proxy *ForwardProxy) Submit(call *GrpcCall) error {
-	return proxy.listeners.Submit(call)
+func (proxy *Proxy) Submit(call *GrpcCall) error {
+	return proxy.Listeners.Submit(call)
 }
+
+const tcp = "tcp"
 
 // Start starts both the Alation facing and internet facing servers for the forward proxy.
 //
 // This method BLOCKS until both servers are shutdown (likely via the Stop method). if you wish
 // to run this server concurrently (say, for example, in unit tests) then simply run `go proxy.Start()`.
-func (proxy *ForwardProxy) Start() error {
+func (proxy *Proxy) Start() error {
 	internalListener, err := net.Listen(tcp, proxy.InternalAddress())
 	if err != nil {
 		return err
@@ -246,8 +246,8 @@ func (proxy *ForwardProxy) Start() error {
 		return err
 	}
 	logging.LOGGER.Info("Began listening on external address",
-		logging.Address(proxy.externalAddr),
-		logging.Port(proxy.externalPort),
+		logging.Address(proxy.ExternalAddr),
+		logging.Port(proxy.ExternalPort),
 		logging.Protocol(tcp))
 	var internalServerError error
 	var externalServerError error
@@ -267,8 +267,8 @@ func (proxy *ForwardProxy) Start() error {
 		defer wg.Done()
 		externalServerError = proxy.external.Serve(externalListener)
 		logging.LOGGER.Warn("External server stopped",
-			logging.Address(proxy.externalAddr),
-			logging.Port(proxy.externalPort),
+			logging.Address(proxy.ExternalAddr),
+			logging.Port(proxy.ExternalPort),
 			logging.Protocol(tcp),
 			logging.Error(err))
 		proxy.stop()
@@ -288,7 +288,7 @@ func (proxy *ForwardProxy) Start() error {
 }
 
 // Stop stops both the Alation facing and internet facing gRPC servers.
-func (proxy *ForwardProxy) Stop() {
+func (proxy *Proxy) Stop() {
 	proxy.internal.Stop()
 	proxy.external.Stop()
 	proxy.stop()
@@ -297,19 +297,19 @@ func (proxy *ForwardProxy) Stop() {
 // InternalAddress returns the "<addr>:<port>" string for the Alation facing server.
 //
 // This is mostly useful for unit testing.
-func (proxy ForwardProxy) InternalAddress() string {
+func (proxy Proxy) InternalAddress() string {
 	return fmt.Sprintf("%s:%d", proxy.internalAddr, proxy.internalPort)
 }
 
 // ExternalAddress returns the "<addr>:<port>" string for the internet facing server.
 //
 // This is mostly useful for unit testing.
-func (proxy ForwardProxy) ExternalAddress() string {
-	return fmt.Sprintf("%s:%d", proxy.externalAddr, proxy.externalPort)
+func (proxy Proxy) ExternalAddress() string {
+	return fmt.Sprintf("%s:%d", proxy.ExternalAddr, proxy.ExternalPort)
 }
 
 type GrpcCall struct {
-	Alation   ioc.ServerStreamWithError
+	Alation   protocol.ServerStreamWithError
 	Method    string
 	Connector uint64
 	Agent     uint64

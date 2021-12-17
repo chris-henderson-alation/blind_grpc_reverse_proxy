@@ -1,4 +1,4 @@
-package grpcinverter
+package shared
 
 import (
 	"time"
