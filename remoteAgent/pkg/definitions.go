@@ -27,7 +27,7 @@ var KEEPALIVE_CLIENT_PARAMETERS = keepalive.ClientParameters{
 }
 
 // It might be somewhat attractive to use the same exponential backoff
-// settings that gRPC by default uses to manage it's TCP connection.
+// settings that gRPC by default uses to manage it's tcp connection.
 var RECONNECT_EXP_BACKOFF_CONFIG = &backoff.ExponentialBackOff{
 	InitialInterval:     grpcBackoff.DefaultConfig.BaseDelay,
 	RandomizationFactor: grpcBackoff.DefaultConfig.Jitter,
@@ -40,3 +40,5 @@ var BIDIRECTIONAL_STREAM_DESC = &grpc.StreamDesc{
 	ServerStreams: true,
 	ClientStreams: true,
 }
+
+const tcp = "tcp"

@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/sirupsen/logrus"
-
 	"google.golang.org/grpc/metadata"
 )
 
@@ -44,7 +42,8 @@ func ExtractHeader(header string, ctx context.Context) (string, error) {
 		return "", fmt.Errorf("expected the header `%s`, however it was not present", header)
 	}
 	if len(values) > 1 {
-		logrus.Warnf("expected a single value for the header '%s', however the following were found: %v", header, values)
+		// @TODO
+		//logrus.Warnf("expected a single value for the header '%s', however the following were found: %v", header, values)
 	}
 	return values[0], nil
 }

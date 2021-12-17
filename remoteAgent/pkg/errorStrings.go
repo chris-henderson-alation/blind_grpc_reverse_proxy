@@ -31,15 +31,3 @@ ID %d and check up on the health of the system. Some helpful commands might be "
 		Details: []*any.Any{o2},
 	}
 }
-
-//type ErrorString string
-//
-//func (e ErrorString) Fmt(strs ...interface{}) error {
-//	return fmt.Errorf(string(e), strs...)
-//}
-//
-//const ConnectorDown ErrorString = `The connector appears to be down! Please SSH into the node provisioned with you agent ID %d. Some helpful commands might be "docker ps", "docker ps | grep connector_%d", "docker start connector_%d"`
-//
-//type lol struct{}
-//
-//var derp lol = lol{}

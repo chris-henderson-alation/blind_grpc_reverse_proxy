@@ -5,7 +5,6 @@ go 1.17
 require (
 	github.com/cenkalti/backoff/v4 v4.1.2
 	github.com/golang/protobuf v1.5.2
-	github.com/sirupsen/logrus v1.8.1
 	go.uber.org/zap v1.19.1
 	google.golang.org/genproto v0.0.0-20200526211855-cb27e3aa2013
 	google.golang.org/grpc v1.42.0

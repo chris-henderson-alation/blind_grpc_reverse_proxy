@@ -4,21 +4,12 @@ import (
 	"io"
 	"sync"
 
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter/logging"
 	"go.uber.org/zap"
-
-	"google.golang.org/grpc/codes"
-
-	"github.com/sirupsen/logrus"
-	"google.golang.org/grpc/status"
-
 	grpc "google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
-
-var LOGGER *zap.Logger
-
-func SetLogger(logger *zap.Logger) {
-	LOGGER = logger
-}
 
 // ServerStreamWithError serves as a way for functions deeper in the callstack (namely the ForwardProxy function) to return
 // both values and a single optional error back upstream to Alation.
@@ -34,11 +25,14 @@ func (a *ServerStreamWithError) SendError(s *status.Status) {
 	a.Error <- s.Err()
 }
 
-func ForwardProxy(alation ServerStreamWithError, agent GrpcInverter_PipeServer) {
+func ForwardProxy(alation ServerStreamWithError, agent GrpcInverter_PipeServer, logger *zap.Logger) {
+	var bytesIn uint64 = 0
+	var bytesOut uint64 = 0
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		defer logger.Info("AlationRecv coroutine shutting down")
 		var body []byte
 		var msg *Message
 		for {
@@ -50,30 +44,23 @@ func ForwardProxy(alation ServerStreamWithError, agent GrpcInverter_PipeServer) 
 			case io.EOF:
 				// Alation is signaling that it is done sending
 				// messages down the client side of its pipe.
+				logger.Info("Alation sent EOF for its client stream")
 				msg = &Message{EOF: true}
 			default:
 				// Alation croaked!
+				logger.Error("Alation's client stream failed", logging.Error(err))
 				e2 := agent.Send(&Message{Error: ErrorFromGoError(err)})
 				if e2 != nil {
-					// and so did the agent, lol everything is on fire.
-					// I guess this can happen if the network is down for THIS
-					// node and Alation is on a different node entirely.
-					//logrus.Errorf("1")
-					logrus.Error(e2)
+					logger.Error("Failed to send Alation's client stream failure to the agent", logging.Error(e2))
 				}
-				//logrus.Errorf("2")
-				logrus.Errorf("other error from alation.RecvMsg(), %v", err)
 				return
 			}
 			err = agent.Send(msg)
 			if err != nil {
-				// Uhhhh...uh oh. This is likely an internet connection failure. here is where we have
-				// the opportunity to reconnect.
-				//
-				// So the interesting thing here is that we have a message loaded into the barrel to send
-				// downstream. So let's hold onto that just in case the agent manages to reconnect.
-				logrus.Errorf("agent.Send(EOF) failed with %v, type %T", err, err)
+				// @TODO
+				return
 			}
+			bytesIn += uint64(len(body))
 			if msg.EOF {
 				return
 			}
@@ -81,6 +68,7 @@ func ForwardProxy(alation ServerStreamWithError, agent GrpcInverter_PipeServer) 
 	}()
 	go func() {
 		defer wg.Done()
+		defer logger.Info("AgentRecv coroutine shutting down")
 		for {
 			body, err := agent.Recv()
 			switch err {
@@ -89,43 +77,48 @@ func ForwardProxy(alation ServerStreamWithError, agent GrpcInverter_PipeServer) 
 			case io.EOF:
 				// The stream has successfully completed.
 				alation.SendError(nil)
+				logger.Info("Agent cleanly shutdown its send channel.")
 				return
 			default:
-				// Uhhhh...uh oh. This is likely an internet connection failure. Here is where we have
-				// the opportunity to reconnect.
-				logrus.Error(err)
-				alation.SendError(status.New(codes.Unavailable, "it aint up"))
+				alation.SendError(status.New(codes.Unavailable, err.Error()))
+				logger.Error("Unexpected disconnect from agent", logging.Error(err))
 				return
 			}
 			if body.Error != nil {
-				// This is actually where a connector to send ITS error messsage back upstream.
-				// That is, this is where things like "wrong password" and such passthrough.
+				// This is not an error in the sense that any networking or such has
+				// failed. This is the raw error as is being returned by the connector.
 				//
-				// Essentially this is a sad day for the connector, but this is still within the
-				// happy path for this little piece of routing code.
+				// So this is things like "bad password" and "could not reach database"
 				alation.SendError(body.Error.ToStatus())
+				logger.Info("Connector failed its request", logging.Error(ErrorToGoError(body.Error)))
 				return
 			}
 			e := alation.SendMsg(body.Body)
 			if e != nil {
 				// Comms to upstream Alation has failed in some way. We have no way to reconnect
 				// the job at this point as Alation as already hung up, so let's shut things down.
-				logrus.Error(err)
+				//logrus.Error(err)
+				logger.Error("Unexpected disconnect from Alation", logging.Error(err))
 				return
 			}
+			bytesOut += uint64(len(body.Body))
 		}
 	}()
 	wg.Wait()
+	logger.Info("Stream complete",
+		zap.Uint64("bytesFromAlation", bytesIn),
+		zap.Uint64("bytesFromConnector", bytesOut))
 	return
 }
 
-func ReverseProxy(upstream GrpcInverter_PipeClient, connector grpc.ClientStream) {
+func ReverseProxy(upstream GrpcInverter_PipeClient, connector grpc.ClientStream, logger *zap.Logger) {
 	var bytesIn uint64 = 0
 	var bytesOut uint64 = 0
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		defer logger.Info("ProxyRecv coroutine shutting down")
 		for {
 			body, err := upstream.Recv()
 			if err != nil {
@@ -143,13 +136,14 @@ func ReverseProxy(upstream GrpcInverter_PipeClient, connector grpc.ClientStream)
 			err = connector.SendMsg(body.Body)
 			if err != nil {
 				// This can only be, for example EOF. It cannot contain actual error messages
-				logrus.Error(err)
+				//logrus.Error(err)
 				return
 			}
 		}
 	}()
 	go func() {
 		defer wg.Done()
+		defer logger.Info("ConnectorRecv coroutine shutting down")
 		var msg []byte
 		for {
 			err := connector.RecvMsg(&msg)
@@ -158,8 +152,7 @@ func ReverseProxy(upstream GrpcInverter_PipeClient, connector grpc.ClientStream)
 				bytesOut += uint64(len(msg))
 				e := upstream.Send(&Message{Body: msg})
 				if e != nil {
-					// @TODO forward proxy is down
-					logrus.Errorf("upstream.Send(msg) failed with %v, type %T", e, e)
+					logger.Error("Failed to send connector bytes due to a proxy disconnect", logging.Error(e))
 					return
 				}
 			case io.EOF:
@@ -167,15 +160,16 @@ func ReverseProxy(upstream GrpcInverter_PipeClient, connector grpc.ClientStream)
 				//
 				// https://github.com/grpc/grpc-go/blob/ac4edd2a03b9124d2ceda2a7c205396b31200351/stream.go#L857
 				_ = upstream.CloseSend()
+				logger.Info("Connector cleanly shutdown its send channel.")
 				return
 			default:
 				// We are technically the client in this scenario and clients
 				// cannot send errors in the world of gRPC. So we have to represent
 				// it ourselves.
+				logger.Info("Connector failed its request")
 				e := upstream.Send(&Message{Error: ErrorFromGoError(err)})
 				if e != nil {
-					// @TODO forward proxy is down
-					logrus.Errorf("upstream.Send(resp) failed with %v, type %T", e, e)
+					logger.Error("Failed to send connector error back upstream", logging.Error(e))
 					return
 				}
 				// This actually can't fail.
@@ -187,7 +181,7 @@ func ReverseProxy(upstream GrpcInverter_PipeClient, connector grpc.ClientStream)
 		}
 	}()
 	wg.Wait()
-	LOGGER.Info("Stream complete",
+	logger.Info("Stream complete",
 		zap.Uint64("bytesFromAlation", bytesIn),
 		zap.Uint64("bytesFromConnector", bytesOut))
 }

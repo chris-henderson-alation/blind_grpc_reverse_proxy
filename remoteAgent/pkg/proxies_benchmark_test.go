@@ -4,6 +4,8 @@ import (
 	"context"
 	"math/rand"
 	"testing"
+
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter/logging"
 )
 
 // If we test exactly 1K blocks, we would generate exact multiples of
@@ -59,7 +61,7 @@ func BenchmarkFourMegabyte(b *testing.B) {
 }
 
 func testWithChunkSize(b *testing.B, chunkSize int) {
-	DisableLogging()
+	logging.DisableLogging()
 	b.ReportAllocs()
 	b.SetBytes(gigabyte)
 	stack := newStack(&PerfAgent{until: gigabyte})

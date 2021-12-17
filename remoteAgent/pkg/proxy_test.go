@@ -2,6 +2,9 @@ package grpcinverter
 
 import (
 	"context"
+
+	"github.com/cenkalti/backoff/v4"
+
 	// We use both math and crypto rand
 	crand "crypto/rand"
 	"fmt"
@@ -344,6 +347,54 @@ func TestBidirectionalStream(t *testing.T) {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
+// Test multiple agents.
+
+func TestMultipleAgents(t *testing.T) {
+	mutation := randomString()
+	stack := newStack(&UnaryConnector{mutation: mutation})
+	defer stack.Stop()
+	type data struct {
+		alationGives  string
+		connectorAdds string
+		want          string
+	}
+	numAgents := 50
+	// Test for 100 agents connected at once
+	agents := make([]*Agent, numAgents)
+	for i := 0; i < numAgents; i++ {
+		agent := newAgent(stack.forward)
+		defer agent.Stop()
+		agents[i] = agent
+	}
+	var jobId uint64 = 0
+	for i := 0; i < numAgents; i++ {
+		agent := agents[i]
+		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
+			for j := 0; j < 100; j++ {
+				alationGives := randomString()
+				test := data{
+					alationGives:  alationGives,
+					connectorAdds: mutation,
+					want:          fmt.Sprintf("%s%s", alationGives, mutation),
+				}
+				got, err := stack.alation.Unary(NewHeaderBuilder().
+					SetJobId(atomic.AddUint64(&jobId, 1)).
+					SetAgentId(agent.id).
+					SetConnectorId(stack.connector.id).
+					Build(context.Background()), &String{Message: test.alationGives})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got.Message != test.want {
+					t.Errorf("wanted '%s' got '%s'", test.want, got.Message)
+				}
+			}
+		})
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//
 // Test when the connector is down.
 
 func TestConnectorDown(t *testing.T) {
@@ -559,6 +610,7 @@ func (t *TechStack) HeadersWithJobId(ctx context.Context, jobId uint64) context.
 func newStack(connector TestServer) *TechStack {
 	return newCustomNetworkingStack(connector, nil, nil, nil)
 }
+
 func newCustomNetworkingStack(connector TestServer, alationToForwardAddr, forwardToAgentAddr, agentToConnectorAddr *string) *TechStack {
 	if alationToForwardAddr == nil {
 		alationToForwardAddr = &loopback
@@ -572,15 +624,12 @@ func newCustomNetworkingStack(connector TestServer, alationToForwardAddr, forwar
 	forward := NewForwardProxy(
 		*alationToForwardAddr, uint16(atomic.AddUint32(&alationFacingPort, 1)),
 		*forwardToAgentAddr, uint16(atomic.AddUint32(&agentFacingPort, 1)))
-	go forward.Start()
-	agent := NewAgent(atomic.AddUint64(&agentId, 1), *forwardToAgentAddr, forward.externalPort)
-	go agent.EventLoop()
-	for {
-		if forward.listeners.Listening(agentId) {
-			break
+	go func() {
+		if err := forward.Start(); err != nil {
+			panic(err)
 		}
-		time.Sleep(time.Millisecond * 100)
-	}
+	}()
+	agent := newAgent(forward)
 	connectorServer := NewConnector(connector, *agentToConnectorAddr)
 	connectorServer.Start()
 	alation := NewAlationClient(forward.InternalAddress())
@@ -590,6 +639,30 @@ func newCustomNetworkingStack(connector TestServer, alationToForwardAddr, forwar
 		agent:     agent,
 		connector: connectorServer,
 	}
+}
+
+func newAgent(target *ForwardProxy) *Agent {
+	agent := NewAgent(atomic.AddUint64(&agentId, 1), target.externalAddr, target.externalPort)
+	go func() {
+		agent.EventLoop()
+	}()
+	err := backoff.Retry(func() error {
+		if target.listeners.Listening(agentId) {
+			return nil
+		}
+		return fmt.Errorf("not yet connected")
+	}, &backoff.ExponentialBackOff{
+		InitialInterval:     time.Millisecond * 100,
+		RandomizationFactor: 0.2,
+		Multiplier:          1.6,
+		MaxInterval:         time.Second,
+		MaxElapsedTime:      time.Second * 2,
+		Clock:               backoff.SystemClock,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return agent
 }
 
 func NewAlationClient(target string) TestClient {

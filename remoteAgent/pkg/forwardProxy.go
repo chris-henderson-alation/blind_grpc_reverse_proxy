@@ -1,13 +1,14 @@
 package grpcinverter
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sync"
 
-	"google.golang.org/grpc/peer"
+	"github.com/pkg/errors"
 
-	"go.uber.org/zap"
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter/logging"
 
 	"github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter/ioc"
 
@@ -30,9 +31,13 @@ type ForwardProxy struct {
 	internal *grpc.Server
 	external *grpc.Server
 	ioc.UnimplementedGrpcInverterServer
+
+	ctx  context.Context
+	stop context.CancelFunc
 }
 
 func NewForwardProxy(internalAddr string, internalPort uint16, externalAddr string, externalPort uint16) *ForwardProxy {
+	ctx, stop := context.WithCancel(context.Background())
 	forwardProxy := &ForwardProxy{
 		internalAddr: internalAddr,
 		internalPort: internalPort,
@@ -40,6 +45,8 @@ func NewForwardProxy(internalAddr string, internalPort uint16, externalAddr stri
 		externalPort: externalPort,
 		listeners:    NewListenerMap(),
 		pending:      NewPendingJobs(),
+		ctx:          ctx,
+		stop:         stop,
 	}
 	internalServer := grpc.NewServer(
 		grpc.KeepaliveParams(KEEPALIVE_SERVER_PARAMETERS),
@@ -56,49 +63,44 @@ func NewForwardProxy(internalAddr string, internalPort uint16, externalAddr stri
 }
 
 func (proxy *ForwardProxy) JobTunnel(_ *empty.Empty, agent ioc.GrpcInverter_JobTunnelServer) error {
-	p, _ := peer.FromContext(agent.Context())
 	agentId, err := ExtractAgentId(agent.Context())
 	if err != nil {
 		// @TODO Don't try too hard here, this will get replaced by looking up the contents of the cert.
-		LOGGER.Error("An agent failed to identify itself")
+		logging.LOGGER.Error("An agent failed to identify itself", logging.PeerAgent(agent.Context()))
 		return err
 	}
-	jobs, alreadyRegistered := proxy.listeners.Register(agentId)
-	if alreadyRegistered {
-		LOGGER.Warn("An agent attempted to connect to the job tunnel, however an agent with its ID is already registered",
-			zap.Uint64("agent", agentId),
-			zap.String("agentIP", p.Addr.String()))
+	jobs := proxy.listeners.Register(agentId)
+	if jobs == nil {
+		logging.LOGGER.Warn("An agent attempted to connect to the job tunnel, however an agent with its ID is already registered",
+			logging.Agent(agentId),
+			logging.PeerAgent(agent.Context()))
 		return fmt.Errorf("already registered")
 	}
-	LOGGER.Info("An agent has connected to its job tunnel.",
-		zap.Uint64("agent", agentId),
-		zap.String("agentIP", p.Addr.String()))
+	logger := logging.LOGGER.With(
+		logging.Agent(agentId),
+		logging.PeerAgent(agent.Context()))
 	for {
 		select {
 		case <-agent.Context().Done():
-			LOGGER.Info("An agent has disconnected from its job tunnel",
-				zap.Uint64("agent", agentId),
-				zap.String("agentIP", p.Addr.String()))
+			logger.Info("An agent has disconnected from its job tunnel")
 			proxy.listeners.Unregister(agentId)
 			return nil
 		case job := <-jobs:
-			LOGGER.Info("Sending job to agent",
-				zap.String("method", job.Method),
-				zap.Uint64("job", job.JobId),
-				zap.Uint64("connector", job.Connector),
-				zap.String("agentIP", p.Addr.String()))
+			logger.Info("Sending job to agent",
+				logging.Method(job.Method),
+				logging.Connector(job.Connector),
+				logging.Job(job.JobId))
 			err := agent.Send(&ioc.Job{
 				JobID:     job.JobId,
 				Method:    job.Method,
 				Connector: job.Connector,
 			})
 			if err != nil {
-				LOGGER.Error("An error occured while sending a job to an agent",
-					zap.String("method", job.Method),
-					zap.Uint64("job", job.JobId),
-					zap.Uint64("connector", job.Connector),
-					zap.String("agentIP", p.Addr.String()),
-					zap.Error(err))
+				logger.Error("An error occurred while sending a job to an agent",
+					logging.Method(job.Method),
+					logging.Connector(job.Connector),
+					logging.Job(job.JobId),
+					logging.Error(err))
 				s, ok := status.FromError(err)
 				if !ok {
 					job.Alation.SendError(status.New(codes.Unavailable, err.Error()))
@@ -107,11 +109,10 @@ func (proxy *ForwardProxy) JobTunnel(_ *empty.Empty, agent ioc.GrpcInverter_JobT
 				}
 				continue
 			}
-			LOGGER.Info("Successfully sent job to agent and awaiting callback",
-				zap.String("method", job.Method),
-				zap.Uint64("job", job.JobId),
-				zap.Uint64("connector", job.Connector),
-				zap.String("agentIP", p.Addr.String()))
+			logger.Info("Successfully sent job to agent and awaiting callback",
+				logging.Method(job.Method),
+				logging.Connector(job.Connector),
+				logging.Job(job.JobId))
 			proxy.pending.Submit(job)
 		}
 	}
@@ -132,13 +133,15 @@ func (proxy *ForwardProxy) Pipe(agent ioc.GrpcInverter_PipeServer) error {
 	if job == nil {
 		return fmt.Errorf("nice catch blanco nino, but too bad your ass got saaaaaacked")
 	}
-	p, _ := peer.FromContext(agent.Context())
-	LOGGER.Info("Agent established callback stream",
-		zap.String("method", job.Method),
-		zap.Uint64("job", job.JobId),
-		zap.Uint64("connector", job.Connector),
-		zap.String("agentIP", p.Addr.String()))
-	ioc.ForwardProxy(job.Alation, agent)
+	jobLogger := logging.LOGGER.With(
+		logging.Method(job.Method),
+		logging.Agent(agentId),
+		logging.Connector(job.Connector),
+		logging.Job(job.JobId),
+		logging.PeerAlation(job.Alation.Context()),
+		logging.PeerAgent(agent.Context()))
+	jobLogger.Info("Agent established callback stream")
+	ioc.ForwardProxy(job.Alation, agent, jobLogger)
 	return nil
 }
 
@@ -153,50 +156,48 @@ func (proxy *ForwardProxy) Pipe(agent ioc.GrpcInverter_PipeServer) error {
 // symmetric protobuf definitions (which would be an egregious maintenance burden for us all).
 func (proxy *ForwardProxy) GenericStreamHandler() grpc.StreamHandler {
 	return func(_ interface{}, upstream grpc.ServerStream) error {
-		// @TODO check return just in case
-		p, _ := peer.FromContext(upstream.Context())
-		fullMethodName, ok := grpc.MethodFromServerStream(upstream)
+		grpcMethod, ok := grpc.MethodFromServerStream(upstream)
 		if !ok {
-			LOGGER.Error("No method was attached to the incoming gRPC call",
-				zap.String("alationIP", p.Addr.String()))
+			logging.LOGGER.Error("No method was attached to the incoming gRPC call",
+				logging.PeerAlation(upstream.Context()))
 			return status.Error(codes.Internal, "@TODO this is comically fatal")
 		}
 		agentId, err := ExtractAgentId(upstream.Context())
 		if err != nil {
-			LOGGER.Error("No agent header was attached to the incoming request",
-				zap.String("method", fullMethodName),
-				zap.String("wanted", AgentIdHeader),
-				zap.String("alationIP", p.Addr.String()))
+			logging.LOGGER.Error("No agent header was attached to the incoming request",
+				logging.Method(grpcMethod),
+				logging.Wanted(AgentIdHeader),
+				logging.PeerAlation(upstream.Context()))
 			return err
 		}
 		connectorId, err := ExtractConnectorId(upstream.Context())
 		if err != nil {
-			LOGGER.Error("No connector header was attached to the incoming request",
-				zap.String("method", fullMethodName),
-				zap.Uint64("agent", agentId),
-				zap.String("wanted", ConnectorIdHeader),
-				zap.String("alationIP", p.Addr.String()))
+			logging.LOGGER.Error("No connector header was attached to the incoming request",
+				logging.Method(grpcMethod),
+				logging.Agent(agentId),
+				logging.Wanted(ConnectorIdHeader),
+				logging.PeerAlation(upstream.Context()))
 			return err
 		}
 		jobId, err := ExtractJobId(upstream.Context())
 		if err != nil {
-			LOGGER.Error("No job header was attached to the incoming request",
-				zap.String("method", fullMethodName),
-				zap.Uint64("agent", agentId),
-				zap.Uint64("connector", connectorId),
-				zap.String("wanted", JobIdHeader),
-				zap.String("alationIP", p.Addr.String()))
+			logging.LOGGER.Error("No job header was attached to the incoming request",
+				logging.Method(grpcMethod),
+				logging.Agent(agentId),
+				logging.Connector(connectorId),
+				logging.Wanted(JobIdHeader),
+				logging.PeerAlation(upstream.Context()))
 			return err
 		}
-		LOGGER.Info("Received a job from Alation",
-			zap.String("method", fullMethodName),
-			zap.Uint64("connector", connectorId),
-			zap.Uint64("agent", agentId),
-			zap.Uint64("job", jobId),
-			zap.String("alationIP", p.Addr.String()))
+		logger := logging.LOGGER.With(logging.Method(grpcMethod),
+			logging.Agent(agentId),
+			logging.Connector(connectorId),
+			logging.Job(jobId),
+			logging.PeerAlation(upstream.Context()))
+		logger.Info("Received a job from Alation")
 		errors := make(chan error)
 		call := &GrpcCall{
-			Method:    fullMethodName,
+			Method:    grpcMethod,
 			Agent:     agentId,
 			Connector: connectorId,
 			JobId:     jobId,
@@ -208,13 +209,13 @@ func (proxy *ForwardProxy) GenericStreamHandler() grpc.StreamHandler {
 		err = proxy.Submit(call)
 		if err != nil {
 			// This is a warning because it is likely simply just a disconnected agent.
-			LOGGER.Warn("Failed to submit job to connector",
-				zap.String("method", fullMethodName),
-				zap.Uint64("connector", connectorId),
-				zap.Uint64("agent", agentId),
-				zap.Uint64("job", jobId),
-				zap.String("alationIP", p.Addr.String()),
-				zap.Error(err))
+			logging.LOGGER.Warn("Failed to submit job to connector",
+				logging.Method(grpcMethod),
+				logging.Agent(agentId),
+				logging.Connector(connectorId),
+				logging.Job(jobId),
+				logging.PeerAlation(upstream.Context()),
+				logging.Error(err))
 			return err
 		}
 		return <-errors
@@ -232,50 +233,65 @@ func (proxy *ForwardProxy) Submit(call *GrpcCall) error {
 // This method BLOCKS until both servers are shutdown (likely via the Stop method). if you wish
 // to run this server concurrently (say, for example, in unit tests) then simply run `go proxy.Start()`.
 func (proxy *ForwardProxy) Start() error {
-	internalListener, err := net.Listen("tcp", proxy.InternalAddress())
+	internalListener, err := net.Listen(tcp, proxy.InternalAddress())
 	if err != nil {
 		return err
 	}
-	LOGGER.Info("Began listening on internal address",
-		zap.String("address", proxy.internalAddr),
-		zap.Uint16("port", proxy.internalPort),
-		zap.String("protocol", "tcp"))
-	externalListener, err := net.Listen("tcp", proxy.ExternalAddress())
+	logging.LOGGER.Info("Began listening on internal address",
+		logging.Address(proxy.internalAddr),
+		logging.Port(proxy.internalPort),
+		logging.Protocol(tcp))
+	externalListener, err := net.Listen(tcp, proxy.ExternalAddress())
 	if err != nil {
 		return err
 	}
-	LOGGER.Info("Began listening on external address",
-		zap.String("address", proxy.externalAddr),
-		zap.Uint16("port", proxy.externalPort),
-		zap.String("protocol", "tcp"))
+	logging.LOGGER.Info("Began listening on external address",
+		logging.Address(proxy.externalAddr),
+		logging.Port(proxy.externalPort),
+		logging.Protocol(tcp))
+	var internalServerError error
+	var externalServerError error
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		err := proxy.internal.Serve(internalListener)
-		LOGGER.Warn("Internal server stopped",
-			zap.String("address", proxy.internalAddr),
-			zap.Uint16("port", proxy.internalPort),
-			zap.String("protocol", "tcp"),
-			zap.Error(err))
+		internalServerError = proxy.internal.Serve(internalListener)
+		logging.LOGGER.Warn("Internal server stopped",
+			logging.Address(proxy.internalAddr),
+			logging.Port(proxy.internalPort),
+			logging.Protocol(tcp),
+			logging.Error(err))
+		proxy.stop()
 	}()
 	go func() {
 		defer wg.Done()
-		err := proxy.external.Serve(externalListener)
-		LOGGER.Warn("External server stopped",
-			zap.String("address", proxy.externalAddr),
-			zap.Uint16("port", proxy.externalPort),
-			zap.String("protocol", "tcp"),
-			zap.Error(err))
+		externalServerError = proxy.external.Serve(externalListener)
+		logging.LOGGER.Warn("External server stopped",
+			logging.Address(proxy.externalAddr),
+			logging.Port(proxy.externalPort),
+			logging.Protocol(tcp),
+			logging.Error(err))
+		proxy.stop()
 	}()
+	<-proxy.ctx.Done()
 	wg.Wait()
-	return nil
+	logging.LOGGER.Info("Forward proxy shutting down.")
+	if internalServerError == nil && externalServerError == nil {
+		return nil
+	} else if internalServerError != nil {
+		return internalServerError
+	} else if externalServerError != nil {
+		return externalServerError
+	} else {
+		return errors.Wrapf(internalServerError, externalServerError.Error())
+	}
 }
 
 // Stop stops both the Alation facing and internet facing gRPC servers.
 func (proxy *ForwardProxy) Stop() {
 	proxy.internal.Stop()
 	proxy.external.Stop()
+	proxy.stop()
 }
 
 // InternalAddress returns the "<addr>:<port>" string for the Alation facing server.

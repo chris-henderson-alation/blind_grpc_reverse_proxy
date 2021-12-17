@@ -5,17 +5,12 @@ import (
 	"fmt"
 	"sync"
 
-	"google.golang.org/grpc/peer"
-
-	"go.uber.org/zap"
-
-	"github.com/golang/protobuf/ptypes/empty"
-
 	"github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter/ioc"
-	"github.com/sirupsen/logrus"
-	"google.golang.org/grpc"
-
+	"github.com/Alation/alation_connector_manager/docker/remoteAgent/grpcinverter/logging"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/golang/protobuf/ptypes/empty"
+	"go.uber.org/zap"
+	"google.golang.org/grpc"
 )
 
 const ConnectorBasePort = 11000
@@ -47,22 +42,22 @@ func NewAgent(id uint64, host string, port uint16) *Agent {
 }
 
 func (a *Agent) EventLoop() {
-	LOGGER.Info("Beginning agent event loop")
+	logging.LOGGER.Info("Beginning agent event loop")
 Init:
 	a.NewUpstreamClient()
 	jobs, err := a.client.JobTunnel(NewHeaderBuilder().SetAgentId(a.id).Build(a.ctx), &empty.Empty{})
 	if err != nil {
-		LOGGER.Error("Client connection was established, however connecting to the job tunnel failed. Reconnected will be attempted.", zap.Error(err))
+		logging.LOGGER.Error("Client connection was established, however connecting to the job tunnel failed. Reconnected will be attempted.", zap.Error(err))
 		goto Init
 	}
 	for {
 		job, err := jobs.Recv()
 		if err != nil {
 			if a.Cancelled() {
-				LOGGER.Info("Agent shutting down")
+				logging.LOGGER.Info("Agent shutting down")
 				return
 			}
-			LOGGER.Error("The job tunnel appears to have been shutdown. Reconnects will be attempted.", zap.Error(err))
+			logging.LOGGER.Error("The job tunnel appears to have been shutdown. Reconnects will be attempted.", zap.Error(err))
 			goto Init
 		}
 		go a.Dispatch(job)
@@ -72,10 +67,10 @@ Init:
 func (a *Agent) Dispatch(job *ioc.Job) {
 	//////////////////////////////////////////////
 	// Establish the callback stream.
-	LOGGER.Info("Received job, attempting to establish callback stream",
-		zap.String("method", job.Method),
-		zap.Uint64("connector", job.Connector),
-		zap.Uint64("job", job.JobID))
+	logging.LOGGER.Info("Received job, attempting to establish callback stream",
+		logging.Method(job.Method),
+		logging.Connector(job.Connector),
+		logging.Job(job.JobID))
 	upstream, err := a.client.Pipe(NewHeaderBuilder().
 		SetConnectorId(job.Connector).
 		SetAgentId(a.id).
@@ -84,37 +79,41 @@ func (a *Agent) Dispatch(job *ioc.Job) {
 	if err != nil {
 		panic(err)
 	}
-	p, _ := peer.FromContext(upstream.Context())
-	LOGGER.Info("Established callback stream",
-		zap.String("method", job.Method),
-		zap.Uint64("connector", job.Connector),
-		zap.Uint64("job", job.JobID),
-		zap.String("proxyIP", p.Addr.String()))
+	logging.LOGGER.Info("Established callback stream",
+		logging.Method(job.Method),
+		logging.Connector(job.Connector),
+		logging.Job(job.JobID),
+		logging.PeerProxy(upstream.Context()))
 	//////////////////////////////////////////////
 	//////////////////////////////////////////////
 	// Retrieve or create the connection to the connector.
-	LOGGER.Info("Attempting to establish connection to downstream connector",
-		zap.String("method", job.Method),
-		zap.Uint64("connector", job.Connector),
-		zap.Uint64("job", job.JobID))
+	logging.LOGGER.Info("Attempting to establish connection to downstream connector",
+		logging.Method(job.Method),
+		logging.Connector(job.Connector),
+		logging.Job(job.JobID))
 	downstream, err := a.NewDownStreamClient(job.Connector, job.Method)
 	if err != nil {
 		e2 := upstream.Send(&ioc.Message{Error: ConnectorDown.Fmt(err, a.id, job.Connector)})
 		if e2 != nil {
-			logrus.Errorf("Original %v second %v", err, err)
+			// @TODO
+			logging.LOGGER.Error("bad and worse")
 		}
 		return
 	}
-	p, _ = peer.FromContext(downstream.Context())
-	LOGGER.Info("Connection established to downstream connector",
-		zap.String("method", job.Method),
-		zap.Uint64("connector", job.Connector),
-		zap.Uint64("job", job.JobID),
-		zap.String("connectorIP", p.Addr.String()))
+	logging.LOGGER.Info("Connection established to downstream connector",
+		logging.Method(job.Method),
+		logging.Connector(job.Connector),
+		logging.Job(job.JobID),
+		logging.PeerConnector(downstream.Context()))
 	//////////////////////////////////////////////
 	//////////////////////////////////////////////
 	// Begin proxying.
-	ioc.ReverseProxy(upstream, downstream)
+	logger := logging.LOGGER.With(logging.Method(job.Method),
+		logging.Connector(job.Connector),
+		logging.Job(job.JobID),
+		logging.PeerProxy(upstream.Context()),
+		logging.PeerConnector(downstream.Context()))
+	ioc.ReverseProxy(upstream, downstream, logger)
 }
 
 func (a *Agent) NewDownStreamClient(connectorId uint64, method string) (grpc.ClientStream, error) {
@@ -156,13 +155,11 @@ func (a *Agent) NewUpstreamClient() {
 	// have a maximum elapsed time, then you will have to handle the possible error return.
 	_ = backoff.Retry(func() error {
 		var err error
-		//logrus.Warnf("Attempting connection to %s", target)
 		conn, err = grpc.Dial(target,
 			grpc.WithInsecure(), // @TODO NOT INSECURE
 			grpc.WithBlock(),
 			grpc.WithKeepaliveParams(KEEPALIVE_CLIENT_PARAMETERS))
 		if err != nil {
-			logrus.Warnf("Connection to %s failed. This will be reattempted.", target)
 			return err
 		}
 		return nil
